@@ -1,0 +1,9 @@
+data/*
+!data/.gitkeep
+.venv
+__pycache__/
+**.egg-info/
+.DS_Store
+__marimo__
+experiments/**/*.png
+experiments/**/*.csv

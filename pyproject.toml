@@ -1,0 +1,9 @@
+[project]
+name = "2026-py-template"
+requires-python = "==3.13.*"
+classifiers = ["Programming Language :: Python :: Implementation :: CPython"]
+dynamic = ["version"]
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8.3.5", "ruff>=0.9.2", "ty>=0.0.14"]

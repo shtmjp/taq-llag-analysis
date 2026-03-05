@@ -1,0 +1,11 @@
+[src]
+exclude = []
+
+[environment]
+extra-paths = ["src"]
+
+[rules]
+all = "ignore"
+unresolved-import = "error"
+unresolved-reference = "error"
+assert-type-unspellable-subtype = "ignore"

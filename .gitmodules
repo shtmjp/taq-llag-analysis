@@ -1,0 +1,3 @@
+[submodule "my-skills"]
+	path = my-skills
+	url = https://github.com/shtmjp/my-skills.git
