@@ -1,5 +1,5 @@
 [src]
-exclude = []
+exclude = ["my-skills"]
 
 [environment]
 extra-paths = ["src"]

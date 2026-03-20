@@ -3,7 +3,18 @@ name = "2026-py-template"
 requires-python = "==3.13.*"
 classifiers = ["Programming Language :: Python :: Implementation :: CPython"]
 dynamic = ["version"]
-dependencies = []
+dependencies = [
+    "marimo>=0.20.4",
+    "matplotlib>=3.10.8",
+    "numpy>=2.4.2",
+    "polars>=1.38.1",
+    "ppllag",
+    "pyzmq>=27.1.0",
+    "requests>=2.32.5",
+]
 
 [dependency-groups]
 dev = ["pytest>=8.3.5", "ruff>=0.9.2", "ty>=0.0.14"]
+
+[tool.uv.sources]
+ppllag = { git = "https://github.com/shtmjp/ppllag.git" }

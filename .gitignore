@@ -1,5 +1,6 @@
 data/*
 !data/.gitkeep
+!data/README.md
 .venv
 __pycache__/
 **.egg-info/
