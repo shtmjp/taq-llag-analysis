@@ -4,6 +4,7 @@ requires-python = "==3.13.*"
 classifiers = ["Programming Language :: Python :: Implementation :: CPython"]
 dynamic = ["version"]
 dependencies = [
+    "joblib>=1.5.3",
     "marimo>=0.20.4",
     "matplotlib>=3.10.8",
     "numpy>=2.4.2",
@@ -11,6 +12,7 @@ dependencies = [
     "ppllag",
     "pyzmq>=27.1.0",
     "requests>=2.32.5",
+    "tqdm>=4.67.3",
 ]
 
 [dependency-groups]

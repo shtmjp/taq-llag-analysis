@@ -30,3 +30,7 @@ Use the minimum complexity that keeps scientific correctness auditable.
 - `tests/` stores the pytest suite.
 - `notebooks/` contains marimo notebooks.
 - `data/` is for raw data files.
+
+## documents
+
+- Data details: `documents/Daily_TAQ_Client_Spec_v4.1b.pdf`

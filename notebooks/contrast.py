@@ -14,6 +14,7 @@ def _():
     import ppllag
 
     import sys
+
     sys.path.append("../src")
 
     from daily_taq_trade_filter import filtered_trade_lazy_frame
@@ -23,8 +24,6 @@ def _():
 
 @app.cell
 def _(Path, np):
-    from typing import Any
-    from ty_extensions import Unknown
     input_path = Path("../data/dailyTAQ/TRADE/EQY_US_ALL_TRADE_20251103")
     output_path = Path(
         "../data/derived/daily_taq_trade_parquet/EQY_US_ALL_TRADE_20251103.AAPL.NQ.filtered.parquet",
@@ -35,7 +34,7 @@ def _(Path, np):
     market_close_sec = 56_700
     obs_window = (35_100.0, 56_701.0)
     u_range = (-1.0, 1.0)
-    bw_candidates: np.ndarray[tuple[Any, ...], np.dtype[Unknown]] = np.array([1e-7, 1e-6, 1e-5, 1e-4], dtype=np.float64)
+    bw_candidates = np.array([1e-7, 1e-6, 1e-5, 1e-4], dtype=np.float64)
     kernel = "tent"
     allow_not_simple = True
     u_values = np.linspace(-1e-3, 1e-3, 2001, dtype=np.float64)
@@ -108,7 +107,7 @@ def _(np, pl, trade_df):
 @app.cell
 def _(
     allow_not_simple,
-    bw_candidates: "np.ndarray[tuple[Any, ...], np.dtype[Unknown]]",
+    bw_candidates,
     data1,
     data2,
     kernel,
@@ -213,11 +212,6 @@ def _(data2, np, obs_window, plt, ppllag, symbol):
 
     plt.plot(_grid, pcf_values2, color="#0f766e", linewidth=1.5)
     plt.title(f"{symbol} PCF (Z), bandwidth=1e-6")
-    return
-
-
-@app.cell
-def _():
     return
 
 
