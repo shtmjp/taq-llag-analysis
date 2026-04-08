@@ -8,6 +8,7 @@ import polars as pl
 
 from write_m_trade_quote_mode_summary import (
     _count_shared_event_times,
+    _csv_frame,
     _event_arrays_by_exchange,
     _scan_event_counts,
     build_mode_summary,
@@ -162,3 +163,28 @@ def test_count_shared_event_times_counts_exact_overlaps() -> None:
     )
 
     assert shared_count == N_SHARED_EVENT_TIMES
+
+
+def test_csv_frame_uses_declared_schema_for_late_string_values() -> None:
+    df = _csv_frame(
+        [
+            {"value": 1.0, "error_type": None, "error_message": None},
+            {
+                "value": 2.0,
+                "error_type": "NotSimplePrecheck",
+                "error_message": "trade and quote share 3 event_time values",
+            },
+        ],
+        schema={
+            "value": pl.Float64,
+            "error_type": pl.String,
+            "error_message": pl.String,
+        },
+    )
+
+    assert df.schema == {
+        "value": pl.Float64,
+        "error_type": pl.String,
+        "error_message": pl.String,
+    }
+    assert df.row(1, named=True)["error_type"] == "NotSimplePrecheck"

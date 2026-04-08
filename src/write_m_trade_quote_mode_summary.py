@@ -168,17 +168,7 @@ def _csv_frame(
     if not rows:
         return pl.DataFrame(schema=schema)
 
-    df = pl.from_dicts(rows)
-    return df.select(
-        [
-            (
-                pl.col(column_name).cast(column_dtype)
-                if column_name in df.columns
-                else pl.lit(None, dtype=column_dtype)
-            ).alias(column_name)
-            for column_name, column_dtype in schema.items()
-        ],
-    )
+    return pl.from_dicts(rows, schema=schema)
 
 
 def _package_version(name: str) -> str | None:
