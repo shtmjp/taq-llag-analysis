@@ -30,7 +30,7 @@ SYMBOL_PREFIX = "M"
 TARGET_DATES: tuple[str, ...] = ("20251031", "20251103")
 MIN_EVENTS_PER_SIDE = 100
 N_JOBS = 1
-OBS_WINDOW = (35_100.0, 56_701.0)
+OBS_WINDOW = (35_100.0, 56_700.0)
 U_RANGE = (-1.0, 1.0)
 BW_CANDIDATES = np.array([1e-7, 1e-6, 1e-5, 1e-4], dtype=np.float64)
 U_GRID_SPEC: dict[str, object] = {
@@ -43,10 +43,12 @@ KERNEL = "tent"
 ALLOW_NOT_SIMPLE = False
 JOBLIB_BACKEND = "loky"
 CROSS_K_WINDOWS: dict[str, tuple[float, float]] = {
-    "cross_k_neg_1e3_0": (-1e-3, 0.0),
-    "cross_k_neg_1e4_0": (-1e-4, 0.0),
-    "cross_k_pos_0_1e4": (0.0, 1e-4),
-    "cross_k_pos_0_1e3": (0.0, 1e-3),
+    "cross_k_neg_1e3_1e4": (-1e-3, -1e-4),
+    "cross_k_neg_1e4_1e5": (-1e-4, -1e-5),
+    "cross_k_neg_1e5_0": (-1e-5, 0.0),
+    "cross_k_pos_0_1e5": (0.0, 1e-5),
+    "cross_k_pos_1e5_1e4": (1e-5, 1e-4),
+    "cross_k_pos_1e4_1e3": (1e-4, 1e-3),
 }
 
 SYMBOL_INVENTORY_SCHEMA: dict[str, pl.DataType] = {
@@ -68,14 +70,17 @@ PAIR_SUMMARY_SCHEMA: dict[str, pl.DataType] = {
     "status": pl.String,
     "n_trade_events": pl.Int64,
     "n_quote_events": pl.Int64,
+    "n_shared_event_times": pl.Int64,
     "bandwidth": pl.Float64,
     "mode_count": pl.Int64,
     "closest_mode_to_zero_sec": pl.Float64,
     "elapsed_sec": pl.Float64,
-    "cross_k_neg_1e3_0": pl.Float64,
-    "cross_k_neg_1e4_0": pl.Float64,
-    "cross_k_pos_0_1e4": pl.Float64,
-    "cross_k_pos_0_1e3": pl.Float64,
+    "cross_k_neg_1e3_1e4": pl.Float64,
+    "cross_k_neg_1e4_1e5": pl.Float64,
+    "cross_k_neg_1e5_0": pl.Float64,
+    "cross_k_pos_0_1e5": pl.Float64,
+    "cross_k_pos_1e5_1e4": pl.Float64,
+    "cross_k_pos_1e4_1e3": pl.Float64,
     "error_type": pl.String,
     "error_message": pl.String,
 }
@@ -129,6 +134,33 @@ def _timestamp_to_time_expr(timestamp_col: str) -> pl.Expr:
     return (hh * 3600.0 + mm * 60.0 + ss + subsec).alias("event_time")
 
 
+def _event_time_frame(
+    path: Path,
+    timestamp_col: str,
+    exchanges: Iterable[str] | None,
+    *,
+    obs_window: tuple[float, float],
+) -> pl.DataFrame:
+    if not path.exists():
+        return pl.DataFrame(schema={"Exchange": pl.String, "event_time": pl.Float64})
+
+    event_df = pl.read_parquet(path, columns=["Exchange", timestamp_col])
+    if exchanges is not None:
+        selected_exchanges = sorted(set(exchanges))
+        if not selected_exchanges:
+            return pl.DataFrame(schema={"Exchange": pl.String, "event_time": pl.Float64})
+        event_df = event_df.filter(pl.col("Exchange").is_in(selected_exchanges))
+
+    return (
+        event_df.group_by(["Exchange", timestamp_col])
+        .agg(pl.len().alias("n_rows"))
+        .with_columns(_timestamp_to_time_expr(timestamp_col))
+        .filter(pl.col("event_time").is_between(obs_window[0], obs_window[1]))
+        .select(["Exchange", "event_time"])
+        .sort(["Exchange", "event_time"])
+    )
+
+
 def _csv_frame(
     rows: list[dict[str, object]],
     schema: Mapping[str, pl.DataType],
@@ -177,14 +209,21 @@ def _git_metadata() -> dict[str, object]:
     }
 
 
-def _scan_event_counts(path: Path, timestamp_col: str) -> dict[str, int]:
-    if not path.exists():
-        return {}
-
+def _scan_event_counts(
+    path: Path,
+    timestamp_col: str,
+    *,
+    obs_window: tuple[float, float],
+) -> dict[str, int]:
     counts_df = (
-        pl.read_parquet(path, columns=["Exchange", timestamp_col])
+        _event_time_frame(
+            path,
+            timestamp_col,
+            exchanges=None,
+            obs_window=obs_window,
+        )
         .group_by("Exchange")
-        .agg(pl.col(timestamp_col).n_unique().alias("n_events"))
+        .agg(pl.len().alias("n_events"))
         .sort("Exchange")
     )
     return {exchange: int(n_events) for exchange, n_events in counts_df.iter_rows()}
@@ -206,19 +245,18 @@ def _event_arrays_by_exchange(
     path: Path,
     timestamp_col: str,
     exchanges: Iterable[str],
+    *,
+    obs_window: tuple[float, float],
 ) -> dict[str, np.ndarray]:
     selected_exchanges = sorted(set(exchanges))
     if not selected_exchanges:
         return {}
 
-    event_df = (
-        pl.read_parquet(path, columns=["Exchange", timestamp_col])
-        .filter(pl.col("Exchange").is_in(selected_exchanges))
-        .group_by(["Exchange", timestamp_col])
-        .agg(pl.len().alias("n_rows"))
-        .with_columns(_timestamp_to_time_expr(timestamp_col))
-        .select(["Exchange", "event_time"])
-        .sort(["Exchange", "event_time"])
+    event_df = _event_time_frame(
+        path,
+        timestamp_col,
+        exchanges=selected_exchanges,
+        obs_window=obs_window,
     )
 
     arrays_by_exchange: dict[str, np.ndarray] = {}
@@ -235,6 +273,30 @@ def _closest_mode_to_zero(modes: np.ndarray) -> float | None:
     if modes.size == 0:
         return None
     return float(modes[np.argmin(np.abs(modes))])
+
+
+def _count_shared_event_times(
+    trade_event_times: np.ndarray,
+    quote_event_times: np.ndarray,
+) -> int:
+    trade_index = 0
+    quote_index = 0
+    n_shared_event_times = 0
+
+    while trade_index < trade_event_times.size and quote_index < quote_event_times.size:
+        trade_time = trade_event_times[trade_index]
+        quote_time = quote_event_times[quote_index]
+        if trade_time < quote_time:
+            trade_index += 1
+            continue
+        if trade_time > quote_time:
+            quote_index += 1
+            continue
+        n_shared_event_times += 1
+        trade_index += 1
+        quote_index += 1
+
+    return n_shared_event_times
 
 
 def _scan_symbols(
@@ -268,10 +330,12 @@ def _scan_symbols(
                     trade_counts=_scan_event_counts(
                         trade_path,
                         "Participant Timestamp",
+                        obs_window=OBS_WINDOW,
                     ),
                     quote_counts=_scan_event_counts(
                         quote_path,
                         "Participant_Timestamp",
+                        obs_window=OBS_WINDOW,
                     ),
                 ),
             )
@@ -377,11 +441,11 @@ def _run_config_dict(
         "event_definitions": {
             "trade": (
                 'filter one exchange, collapse on ("Exchange", "Participant Timestamp"), '
-                "convert to float seconds, sort ascending"
+                "convert to float seconds, filter to obs_window, sort ascending"
             ),
             "quote": (
                 'filter one exchange, collapse on ("Exchange", "Participant_Timestamp"), '
-                "convert to float seconds, sort ascending"
+                "convert to float seconds, filter to obs_window, sort ascending"
             ),
         },
         "cross_k_windows": {
@@ -425,11 +489,13 @@ def _analyze_scan(
         scan.trade_path,
         "Participant Timestamp",
         eligible_trade_exchanges,
+        obs_window=OBS_WINDOW,
     )
     quote_arrays = _event_arrays_by_exchange(
         scan.quote_path,
         "Participant_Timestamp",
         eligible_quote_exchanges,
+        obs_window=OBS_WINDOW,
     )
 
     pair_rows: list[dict[str, object]] = []
@@ -446,14 +512,17 @@ def _analyze_scan(
             "status": "",
             "n_trade_events": trade_n_events,
             "n_quote_events": quote_n_events,
+            "n_shared_event_times": None,
             "bandwidth": None,
             "mode_count": None,
             "closest_mode_to_zero_sec": None,
             "elapsed_sec": None,
-            "cross_k_neg_1e3_0": None,
-            "cross_k_neg_1e4_0": None,
-            "cross_k_pos_0_1e4": None,
-            "cross_k_pos_0_1e3": None,
+            "cross_k_neg_1e3_1e4": None,
+            "cross_k_neg_1e4_1e5": None,
+            "cross_k_neg_1e5_0": None,
+            "cross_k_pos_0_1e5": None,
+            "cross_k_pos_1e5_1e4": None,
+            "cross_k_pos_1e4_1e3": None,
             "error_type": None,
             "error_message": None,
         }
@@ -465,6 +534,20 @@ def _analyze_scan(
 
         trade_event_times = trade_arrays[trade_exchange]
         quote_event_times = quote_arrays[quote_exchange]
+        n_shared_event_times = _count_shared_event_times(
+            trade_event_times,
+            quote_event_times,
+        )
+        pair_row["n_shared_event_times"] = n_shared_event_times
+        if n_shared_event_times > 0 and not ALLOW_NOT_SIMPLE:
+            pair_row["status"] = "skipped_not_simple"
+            pair_row["error_type"] = "NotSimplePrecheck"
+            pair_row["error_message"] = (
+                f"trade and quote share {n_shared_event_times} event_time values"
+            )
+            pair_rows.append(pair_row)
+            continue
+
         start_time = time.perf_counter()
         try:
             bandwidth = ppllag.lepski_bw_selector_for_cpcf_mode(

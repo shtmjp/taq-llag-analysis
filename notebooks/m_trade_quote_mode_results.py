@@ -20,10 +20,12 @@ def _(Path):
     results_base_dir = Path("data/derived/m_trade_quote_modes")
     run_id = ""
     cross_k_columns = [
-        "cross_k_neg_1e3_0",
-        "cross_k_neg_1e4_0",
-        "cross_k_pos_0_1e4",
-        "cross_k_pos_0_1e3",
+        "cross_k_neg_1e3_1e4",
+        "cross_k_neg_1e4_1e5",
+        "cross_k_neg_1e5_0",
+        "cross_k_pos_0_1e5",
+        "cross_k_pos_1e5_1e4",
+        "cross_k_pos_1e4_1e3",
     ]
     return cross_k_columns, results_base_dir, run_id
 
