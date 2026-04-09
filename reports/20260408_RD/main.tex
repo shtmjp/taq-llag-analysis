@@ -1,0 +1,702 @@
+\documentclass[a4paper,11pt]{jlreq}
+
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage[haranoaji]{luatexja-preset}
+\usepackage{siunitx}
+\usepackage{xcolor}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  urlcolor=blue!50!black,
+  citecolor=blue!50!black,
+}
+\setlist[itemize]{leftmargin=2em}
+\setlist[enumerate]{leftmargin=2.2em}
+\sisetup{
+  group-separator = {,},
+  group-minimum-digits = 4,
+}
+\graphicspath{
+  {../../data/derived/m_trade_quote_cpcf_examples/M_20251031-20251103_min100_20260408T060741Z/}
+  {../../data/derived/m_trade_quote_round_lot_effects/M_20251031-20251103_min100_20260408T060741Z_QZ_with_round_lot_sep2025_mean_close/}
+  {../../data/derived/m_trade_quote_rd_250/M_20251031-20251103_min100_20260408T060741Z_QZ_with_round_lot_sep2025_mean_close/}
+}
+
+\title{M 接頭辞銘柄に対する trade-quote panel 構築と round-lot 分析メモ}
+\author{2026-04-08 共有用}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{現状のデータ処理}
+
+\subsection{条件}
+
+\begin{itemize}
+  \item 対象日: \(d \in \mathcal{D}=\{\texttt{20251031}, \texttt{20251103}\}\)
+  \item 対象銘柄集合: 各日における Daily TAQ MASTER のうち，
+        ticker が \texttt{M} で始まる銘柄
+  \item 集計対象の取引所ペア: trade 側 \(e=\texttt{Q}\)，quote 側 \(g=\texttt{Z}\)
+  \item 観測窓: \(\mathcal{W}=[35100.0,56700.0]\)，
+        すなわち \texttt{09:45:00} から \texttt{15:45:00}
+  \item 最低イベント数: 各 side で 100
+  \item mode 推定の探索範囲: \(\mathcal{U}=[-1,1]\)
+  \item bandwidth 候補:
+        \(\mathcal{B}=\{10^{-7},10^{-6},10^{-5},10^{-4}\}\)
+  \item kernel: tent
+  \item simple 条件: trade 側と quote 側で event time が一致する pair は除外
+\end{itemize}
+
+以下で使う pre/post の日付はそれぞれ
+\(\texttt{20251031}\) と \(\texttt{20251103}\) である．
+
+\subsection{入力データ}
+
+今回の panel 構築で用いる入力は 4 種類である．
+
+\begin{center}
+\begin{tabular}{p{0.18\linewidth}p{0.28\linewidth}p{0.42\linewidth}}
+\toprule
+入力 & 位置 & 用途 \\
+\midrule
+MASTER &
+\texttt{data/dailyTAQ/MASTER/} &
+M 接頭辞銘柄集合の抽出と，各日・各銘柄の \texttt{Round\_Lot} 参照に使う． \\
+TRADE &
+\texttt{data/dailyTAQ/TRADE/} &
+trade 側イベント列の構成に使う． \\
+BBO &
+\texttt{data/dailyTAQ/BBO/} &
+quote 側イベント列の構成に使う． \\
+日次終値 &
+\texttt{yfinance} &
+\(\texttt{2025-09-01}\) から \(\texttt{2025-10-01}\) の
+日次終値平均 \(\bar{p}^{\mathrm{close}}_s\) を構成する． \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+各日 \(d\) の MASTER から，
+\[
+  \mathcal{S}_d
+  =
+  \left\{
+    s
+    \mid
+    s \text{ starts with \texttt{M}}
+  \right\}
+\]
+を作る．既存成果物では各日とも \(|\mathcal{S}_d|=636\) である．
+
+\subsection{パイプライン全体像}
+
+panel 構築の流れは次の 4 段階である．
+
+\begin{enumerate}
+  \item MASTER から M 接頭辞銘柄集合を抽出する．
+  \item raw TRADE と raw BBO を観測窓 \(\mathcal{W}\) に制限し，
+        銘柄別 filtered parquet を作る．
+  \item 各 \((d,s)\) について取引所 pair を走査し，
+        mode と cross-K を集計する．
+  \item \(e=\texttt{Q}\)，\(g=\texttt{Z}\)，status=\texttt{ok} の pair だけを残し，
+        2 日比較の symbol-level panel に整形する．
+\end{enumerate}
+
+このとき，最終的に使う panel を
+\[
+  P=\{p_s\}_{s=1}^{N_P}
+\]
+と書く．ここで \(s\) は銘柄 index であり，
+\(N_P\) は panel に含まれる銘柄数である．
+
+\subsection{最終 panel の構成}
+
+最終 panel は，各銘柄 \(s\) に対して
+\[
+  p_s =
+  \left(
+    s,
+    \bar{p}^{\mathrm{close}}_s,
+    p_{s,\texttt{20251031}},
+    p_{s,\texttt{20251103}}
+  \right)
+\]
+を 1 行に持つ wide 形式の表である．
+各日ブロック \(p_{s,d}\) には round lot，closest mode to zero，
+6 個の cross-K 指標が入る．
+
+列数は固定で 18 であり，今回の panel の行列サイズは \((153,18)\) である．
+2 日とも値が揃う銘柄数は 130，そのうち
+round lot が日付間で変化する銘柄数は 9 である．
+
+\subsection{CPCF の具体例}
+
+Section 2 と Section 3 の推定結果は，
+最終的には各銘柄・各日について選ばれた bandwidth のもとでの
+CPCF の形状に支えられている．
+そこで，Q-Z pair の event-time 構造が実際にどのように見えるかを，
+4 銘柄の具体例で示す．
+横軸は trade 側と quote 側のイベント時刻のずれをマイクロ秒単位で表し，
+縦軸はそのずれに対応する CPCF の値である．
+
+選んだ 4 銘柄は次のとおりである．
+\begin{itemize}
+  \item \texttt{MORN}: \(250\) ドル cutoff の直下にあり，round lot が変化しない例
+  \item \texttt{MAR}: \(250\) ドル cutoff の直上にあり，\(100 \to 40\) へ移行した例
+  \item \texttt{MDB}: 40 へ移行した別の例
+  \item \texttt{MSFT}: 高流動性の 40 への移行例
+\end{itemize}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.48\linewidth]{cpcf__MORN.png}
+\includegraphics[width=0.48\linewidth]{cpcf__MAR.png}
+
+\vspace{0.8em}
+
+\includegraphics[width=0.48\linewidth]{cpcf__MDB.png}
+\includegraphics[width=0.48\linewidth]{cpcf__MSFT.png}
+\caption{CPCF の具体例．各図は \texttt{2025-10-31} と \texttt{2025-11-03} を左右に並べ，
+各銘柄・各日に対して選ばれた bandwidth をそのまま使って CPCF を再評価したものである．
+左上が \texttt{MORN}，右上が \texttt{MAR}，左下が \texttt{MDB}，右下が \texttt{MSFT} である．
+太い縦線は 0 に最も近い mode 候補，細い縦線は検出された mode 候補を表す．
+この 4 例は，Section 2 と Section 3 で比較している round-lot 関連の結果が，
+日ごと・銘柄ごとの event-time 構造の違いの上に成り立っていることを示している．}
+\end{figure}
+
+\section{round lot 変更回帰と箱ひげ図}
+
+\subsection{設計}
+
+この節では，事前 round lot が 100 である銘柄のうち，
+事後 round lot が 100 のまま残った群と 40 へ移行した群を比較する．
+比較サンプルを
+\[
+  \mathcal{S}^{\mathrm{cmp}}
+  =
+  \left\{
+    s
+    \mid
+    r^{\mathrm{pre}}_s = 100,\
+    r^{\mathrm{post}}_s \in \{100,40\},\
+    \bar{p}^{\mathrm{close}}_s \text{ が観測されている}
+  \right\}
+\]
+と書く．ここで \(r^{\mathrm{pre}}_s\) は pre round lot，
+\(r^{\mathrm{post}}_s\) は post round lot である．
+
+40 への移行指標を
+\[
+  D_s = \mathbf{1}\{r^{\mathrm{post}}_s = 40\}
+\]
+と定義する．
+アウトカムは \(Y_s\) と書き，その変化を \(\Delta Y_s\) とする．
+\(\Delta Y_s\) は \texttt{mode} では事後値から事前値を引いた単純差，
+cross-K では \(\log(1+Y^{\mathrm{post}}_s) - \log(1+Y^{\mathrm{pre}}_s)\)
+とする．
+
+比較回帰は二群 OLS
+\[
+  \Delta Y_s = \alpha + \beta D_s + \varepsilon_s
+\]
+に固定する．ここで \(\beta\) は
+40 へ移行した群の平均変化から
+100 のままの群の平均変化を引いた差を表す．
+
+\subsection{サンプル構成}
+
+今回の分析結果では，サンプル構成は次のとおりである．
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+項目 & 値 \\
+\midrule
+最終 panel の総行数 & 153 \\
+比較サンプルの行数 & 121 \\
+40 へ移行した群 & 8 \\
+100 のままの群 & 113 \\
+事後 round lot \(=10\) のため除外 & 1 \\
+\(250\) ドル基準と整合的な割合（100 のままの群） & 0.973451 \\
+\(250\) ドル基準と整合的な割合（40 へ移行した群） & 1.000000 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{回帰結果の要約}
+
+7 つのアウトカムそれぞれについて，
+40 へ移行した群の平均変化から
+100 のままの群の平均変化を引いた値を推定すると，次の結果になる．
+
+\begin{table}[htbp]
+\centering
+\small
+\resizebox{\linewidth}{!}{
+\begin{tabular}{l l r r r r r r}
+\toprule
+アウトカム & 変化の定義 & 平均変化の差 & 95\% CI 下限 & 95\% CI 上限 & p値 & 40 へ移行 & 100 のまま \\
+\midrule
+\texttt{cross\_k\_neg\_1e3\_1e4} & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) &  0.001660 & -0.129082 &  0.132403 & 0.980144 & 8 & 113 \\
+\texttt{cross\_k\_neg\_1e4\_1e5} & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) & -0.009402 & -0.086283 &  0.067479 & 0.810569 & 8 & 113 \\
+\texttt{cross\_k\_neg\_1e5\_0}   & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) & -0.007898 & -0.030912 &  0.015116 & 0.501183 & 8 & 113 \\
+\texttt{cross\_k\_pos\_0\_1e5}   & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) & -0.017276 & -0.040729 &  0.006177 & 0.148811 & 8 & 113 \\
+\texttt{cross\_k\_pos\_1e4\_1e3} & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) & -0.098694 & -0.285409 &  0.088021 & 0.300202 & 8 & 113 \\
+\texttt{cross\_k\_pos\_1e5\_1e4} & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) & -0.033201 & -0.109971 &  0.043569 & 0.396641 & 8 & 113 \\
+\texttt{mode}                    & \( Y^{\mathrm{post}}-Y^{\mathrm{pre}} \)                & -0.000006 & -0.000017 &  0.000006 & 0.331071 & 8 & 113 \\
+\bottomrule
+\end{tabular}
+}
+\caption{round-lot change 比較回帰の要約．}
+\end{table}
+
+5\% 水準で有意な群間差は確認されない．
+係数の絶対値が最も大きいのは
+\texttt{cross\_k\_pos\_1e4\_1e3} であり，
+次が \texttt{cross\_k\_pos\_1e5\_1e4} と
+\texttt{cross\_k\_pos\_0\_1e5} である．
+ただし，いずれも信頼区間は 0 を跨いでいる．
+
+\subsection{係数プロット}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.86\linewidth]{coef_plot.png}
+\caption{各アウトカムについて，
+40 へ移行した群の平均変化から
+100 のままの群の平均変化を引いた値と 95\% 信頼区間．}
+\end{figure}
+
+\subsection{箱ひげ図}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.78\linewidth]{boxplot__mode.png}
+\caption{\texttt{mode} の箱ひげ図．図中の 2 群は，
+事後 round lot が 100 のままの群と 40 へ移行した群を表す．}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.32\linewidth]{boxplot__cross_k_neg_1e3_1e4.png}
+\includegraphics[width=0.32\linewidth]{boxplot__cross_k_neg_1e4_1e5.png}
+\includegraphics[width=0.32\linewidth]{boxplot__cross_k_neg_1e5_0.png}
+\caption{負側の cross-K 変化の箱ひげ図．左から
+\texttt{cross\_k\_neg\_1e3\_1e4},
+\texttt{cross\_k\_neg\_1e4\_1e5},
+\texttt{cross\_k\_neg\_1e5\_0}.}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.32\linewidth]{boxplot__cross_k_pos_0_1e5.png}
+\includegraphics[width=0.32\linewidth]{boxplot__cross_k_pos_1e5_1e4.png}
+\includegraphics[width=0.32\linewidth]{boxplot__cross_k_pos_1e4_1e3.png}
+\caption{正側の cross-K 変化の箱ひげ図．左から
+\texttt{cross\_k\_pos\_0\_1e5},
+\texttt{cross\_k\_pos\_1e5\_1e4},
+\texttt{cross\_k\_pos\_1e4\_1e3}.}
+\end{figure}
+
+\subsection{解釈}
+
+この節の回帰は cutoff を使う RD ではなく，
+実際に 40 へ移行した 8 銘柄と
+100 のまま残った 113 銘柄の比較である．
+両群の価格帯は大きく異なり，
+平均価格は 100 のままの群がおよそ 72.4，
+40 へ移行した群がおよそ 497.9 である．
+したがって，ここでの \(\beta\) は round-lot 変更の因果効果というより，
+移行群と非移行群の記述的比較として読むべきである．
+
+\section{\$250\$ cutoff の RD 分析}
+
+\subsection{RD 設計}
+
+RD では走行変数を
+\[
+  X_s = \bar{p}^{\mathrm{close}}_s - 250
+\]
+と定義し，cutoff を上回るかどうかの指標を
+\[
+  D^{\mathrm{rule}}_s = \mathbf{1}\{X_s > 0\}
+\]
+と置く．
+RD サンプルでは \(\bar{p}^{\mathrm{close}}_s < 1000\) を課し，
+さらに事後 round lot が cutoff rule と整合的な銘柄だけを残す．
+ここで outcome は Section 2 と同じ 7 本である．
+
+\subsection{サンプル構成}
+
+今回の RD 集計結果では，サンプル構成は次のとおりである．
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+項目 & 値 \\
+\midrule
+分析対象の行数 & 118 \\
+cutoff 左側の観測数 & 110 \\
+cutoff 右側の観測数 & 8 \\
+右側で実際に 40 へ移行した銘柄数 & 8 \\
+cutoff & 250.0 \\
+価格上限 & 1000.0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+右側の観測数が 8 と小さい点は，この RD 分析の主要な制約である．
+
+\subsection{RD 推定結果}
+
+robust 標準誤差を使った RD 推定結果は次のとおりである．
+
+\begin{table}[htbp]
+\centering
+\small
+\resizebox{\linewidth}{!}{
+\begin{tabular}{l l r r r r r r}
+\toprule
+アウトカム & 変化の定義 & 推定された跳び & 95\% CI 下限 & 95\% CI 上限 & p値 & 左側観測数 & 右側観測数 \\
+\midrule
+\texttt{cross\_k\_neg\_1e3\_1e4} & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) & -0.418469 & -0.859487 &  0.022550 & 0.062921 & 110 & 8 \\
+\texttt{cross\_k\_neg\_1e4\_1e5} & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) & -0.215612 & -0.388886 & -0.042338 & 0.014733 & 110 & 8 \\
+\texttt{cross\_k\_neg\_1e5\_0}   & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) & -0.063431 & -0.167633 &  0.040771 & 0.232834 & 110 & 8 \\
+\texttt{cross\_k\_pos\_0\_1e5}   & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) & -0.070373 & -0.160050 &  0.019305 & 0.124039 & 110 & 8 \\
+\texttt{cross\_k\_pos\_1e4\_1e3} & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) & -0.609332 & -1.174146 & -0.044517 & 0.034477 & 110 & 8 \\
+\texttt{cross\_k\_pos\_1e5\_1e4} & \( \log(1+Y^{\mathrm{post}})-\log(1+Y^{\mathrm{pre}}) \) & -0.252249 & -0.463223 & -0.041274 & 0.019109 & 110 & 8 \\
+\texttt{mode}                    & \( Y^{\mathrm{post}}-Y^{\mathrm{pre}} \)                &  0.000017 & -0.000041 &  0.000076 & 0.558408 & 110 & 8 \\
+\bottomrule
+\end{tabular}
+}
+\caption{\$250\$ cutoff RD の推定結果．}
+\end{table}
+
+5\% 水準で負の discontinuity が確認されるのは
+\texttt{cross\_k\_neg\_1e4\_1e5},
+\texttt{cross\_k\_pos\_1e5\_1e4},
+\texttt{cross\_k\_pos\_1e4\_1e3} の 3 つである．
+10\% 水準では \texttt{cross\_k\_neg\_1e3\_1e4} も追加される．
+\texttt{mode} の discontinuity は有意でない．
+
+\subsection{RD 図}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.78\linewidth]{rd_plot__mode.png}
+\caption{\texttt{mode} の RD 図．}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.32\linewidth]{rd_plot__cross_k_neg_1e3_1e4.png}
+\includegraphics[width=0.32\linewidth]{rd_plot__cross_k_neg_1e4_1e5.png}
+\includegraphics[width=0.32\linewidth]{rd_plot__cross_k_neg_1e5_0.png}
+\caption{負側の cross-K 変化の RD 図．左から
+\texttt{cross\_k\_neg\_1e3\_1e4},
+\texttt{cross\_k\_neg\_1e4\_1e5},
+\texttt{cross\_k\_neg\_1e5\_0}.}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.32\linewidth]{rd_plot__cross_k_pos_0_1e5.png}
+\includegraphics[width=0.32\linewidth]{rd_plot__cross_k_pos_1e5_1e4.png}
+\includegraphics[width=0.32\linewidth]{rd_plot__cross_k_pos_1e4_1e3.png}
+\caption{正側の cross-K 変化の RD 図．左から
+\texttt{cross\_k\_pos\_0\_1e5},
+\texttt{cross\_k\_pos\_1e5\_1e4},
+\texttt{cross\_k\_pos\_1e4\_1e3}.}
+\end{figure}
+
+\subsection{制約}
+
+\begin{itemize}
+  \item \texttt{rddensity} は pandas 3 非互換のため omitted である．
+  \item bandwidth source は \texttt{manual\_fallback} である．
+  \item automatic bandwidth は
+        \texttt{LinAlgError("Matrix is not positive definite")} により失敗している．
+  \item Appendix E の balance table が示すように，
+        事前 covariate にも強い discontinuity があるため，
+        因果解釈は慎重であるべきである．
+\end{itemize}
+
+\clearpage
+\appendix
+
+\section{処理の数理的定義}
+
+\subsection{event 列の定義}
+
+trade 側では，日付 \(d\)，銘柄 \(s\)，取引所 \(e\) に対して，
+観測された event time 列を
+\[
+  T_{d,s,e} = \{t^{\mathrm{tr}}_{d,s,e,i}\}_{i=1}^{N^{\mathrm{tr}}_{d,s,e}}
+\]
+と書く．ここで \(N^{\mathrm{tr}}_{d,s,e}\) は dedup 後の event 数であり，
+\(i=1,\dots,N^{\mathrm{tr}}_{d,s,e}\) である．
+各 \(t^{\mathrm{tr}}_{d,s,e,i}\) は \texttt{Participant Timestamp} を
+秒へ変換した値であり，
+\((\texttt{Exchange}, \texttt{Participant Timestamp})\) の重複を潰した後で
+\(\mathcal{W}\) 内に制限したものとする．
+
+quote 側では，日付 \(d\)，銘柄 \(s\)，取引所 \(g\) に対して，
+\[
+  Q_{d,s,g} = \{t^{\mathrm{qt}}_{d,s,g,j}\}_{j=1}^{N^{\mathrm{qt}}_{d,s,g}}
+\]
+を定義する．ここで \(N^{\mathrm{qt}}_{d,s,g}\) は dedup 後の event 数であり，
+\(j=1,\dots,N^{\mathrm{qt}}_{d,s,g}\) である．
+各 \(t^{\mathrm{qt}}_{d,s,g,j}\) は \texttt{Participant\_Timestamp} を
+秒へ変換した値であり，
+\((\texttt{Exchange}, \texttt{Participant\_Timestamp})\) の重複を潰した後で
+\(\mathcal{W}\) 内に制限したものとする．
+
+raw BBO から quote 側イベントを作る前に，
+\[
+  \texttt{Bid\_Price} > 0,\quad
+  \texttt{Offer\_Price} > 0,\quad
+  \texttt{Bid\_Price} < \texttt{Offer\_Price}
+\]
+を課す．
+
+\subsection{pair summary の定義}
+
+候補 pair 集合を
+\[
+  \mathcal{P}_{d,s}
+  =
+  \left\{
+    (e,g)
+    \mid
+    e \in \mathcal{E}^{\mathrm{tr}}_{d,s},
+    \ g \in \mathcal{E}^{\mathrm{qt}}_{d,s},
+    \ e \neq g
+  \right\}
+\]
+と書く．
+pair \((e,g)\) は
+\[
+  N^{\mathrm{tr}}_{d,s,e} \ge 100,\quad
+  N^{\mathrm{qt}}_{d,s,g} \ge 100
+\]
+を満たすときに解析対象になる．
+
+共有 event time の個数
+\[
+  H_{d,s,e,g}
+  =
+  \#\left(T_{d,s,e}\cap Q_{d,s,g}\right)
+\]
+が正ならその pair は除外する．
+
+解析対象の pair に対して，mode 集合
+\[
+  \mathcal{M}_{d,s,e,g}
+  =
+  \{m_{d,s,e,g,\ell}\}_{\ell=1}^{L_{d,s,e,g}}
+\]
+を求め，代表値
+\[
+  m^{\star}_{d,s,e,g}
+  =
+  \arg\min_{m \in \mathcal{M}_{d,s,e,g}} |m|
+\]
+を \texttt{closest\_mode\_to\_zero\_sec} として保持する．
+
+cross-K は次の 6 区間で評価する．
+\[
+  [-10^{-3},-10^{-4}],
+  [-10^{-4},-10^{-5}],
+  [-10^{-5},0],
+  [0,10^{-5}],
+  [10^{-5},10^{-4}],
+  [10^{-4},10^{-3}].
+\]
+
+\section{完全再現手順}
+
+\subsection{前提}
+
+\begin{itemize}
+  \item repository root からコマンドを実行する．
+  \item Python 環境は \texttt{uv} で同期する．
+  \item Daily TAQ の MASTER, TRADE, BBO データは
+        \texttt{data/dailyTAQ/} 配下にある前提で進める．
+  \item 平均終値の付与にはネットワーク経由で \texttt{yfinance} を使う．
+\end{itemize}
+
+\subsection{panel 構築}
+
+\begin{enumerate}
+  \item 依存関係を同期する．
+\begin{verbatim}
+uv sync
+\end{verbatim}
+
+  \item M 接頭辞銘柄について filtered parquet を作る．
+\begin{verbatim}
+uv run python src/write_m_trade_quote_parquets.py
+\end{verbatim}
+
+  \item mode summary を計算する．
+\begin{verbatim}
+uv run python src/write_m_trade_quote_mode_summary.py \
+  --date 20251031 \
+  --date 20251103 \
+  --symbol-prefix M \
+  --min-events-per-side 100 \
+  --n-jobs 8
+\end{verbatim}
+
+  \item \texttt{notebooks/m\_trade\_quote\_mode\_symbol\_panel.py} を開き，
+        \texttt{run\_id} に直前の run directory 名を明示入力して全セル実行する．
+\end{enumerate}
+
+\subsection{round-lot change 回帰}
+
+\begin{enumerate}
+  \item \texttt{notebooks/m\_trade\_quote\_round\_lot\_effects.py} を開く．
+  \item 既定の panel CSV を入力として全セル実行する．
+  \item 出力先は
+\begin{verbatim}
+data/derived/m_trade_quote_round_lot_effects/
+\end{verbatim}
+        配下である．
+\end{enumerate}
+
+\subsection{RD 分析}
+
+\begin{enumerate}
+  \item \texttt{notebooks/m\_trade\_quote\_rd\_250.py} を開く．
+  \item 既定の panel CSV を入力として全セル実行する．
+  \item 出力先は
+\begin{verbatim}
+data/derived/m_trade_quote_rd_250/
+\end{verbatim}
+        配下である．
+\end{enumerate}
+
+\section{sanity check}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+対象 & 指標 & 期待値 \\
+\midrule
+MASTER 抽出 & 各日の M 接頭辞銘柄数 & 636, 636 \\
+候補 pair & \(\#\mathcal{P}_{d,s}\) の総和 & 71,532; 73,555 \\
+eligible pair & 両 side が 100 以上の pair 数 & 23,202; 24,053 \\
+Q-Z ok pair & \texttt{status=ok} の行数 & 140; 143 \\
+最終 panel & 行列サイズ & \((153,18)\) \\
+最終 panel & 2 日とも値が揃う銘柄数 & 130 \\
+最終 panel & round-lot changed symbols & 9 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{回帰の群別要約}
+
+\small
+\begin{longtable}{p{0.22\linewidth}p{0.10\linewidth}r r r r r r}
+\toprule
+アウトカム & 群 & 観測数 & 平均価格 & 事前平均 & 事後平均 & 平均変化 & \(250\)ドル整合率 \\
+\midrule
+\endhead
+\texttt{cross\_k\_neg\_1e3\_1e4} & 100のまま & 113 & 72.381 & 4.871217 & 4.715359 & -0.022200 & 0.973451 \\
+\texttt{cross\_k\_neg\_1e3\_1e4} & 40へ移行  &   8 & 497.864 & 1.388735 & 1.346083 & -0.020540 & 1.000000 \\
+\texttt{cross\_k\_neg\_1e4\_1e5} & 100のまま & 113 & 72.381 & 1.836563 & 1.745616 & -0.011688 & 0.973451 \\
+\texttt{cross\_k\_neg\_1e4\_1e5} & 40へ移行  &   8 & 497.864 & 0.407685 & 0.372571 & -0.021090 & 1.000000 \\
+\texttt{cross\_k\_neg\_1e5\_0}   & 100のまま & 113 & 72.381 & 0.183715 & 0.188516 &  0.003853 & 0.973451 \\
+\texttt{cross\_k\_neg\_1e5\_0}   & 40へ移行  &   8 & 497.864 & 0.043183 & 0.038812 & -0.004045 & 1.000000 \\
+\texttt{cross\_k\_pos\_0\_1e5}   & 100のまま & 113 & 72.381 & 0.159651 & 0.185225 &  0.014656 & 0.973451 \\
+\texttt{cross\_k\_pos\_0\_1e5}   & 40へ移行  &   8 & 497.864 & 0.041407 & 0.038607 & -0.002621 & 1.000000 \\
+\texttt{cross\_k\_pos\_1e4\_1e3} & 100のまま & 113 & 72.381 & 11.887236 & 11.489257 &  0.017207 & 0.973451 \\
+\texttt{cross\_k\_pos\_1e4\_1e3} & 40へ移行  &   8 & 497.864 & 3.915405 & 3.428551 & -0.081487 & 1.000000 \\
+\texttt{cross\_k\_pos\_1e5\_1e4} & 100のまま & 113 & 72.381 & 1.488521 & 1.534846 &  0.029585 & 0.973451 \\
+\texttt{cross\_k\_pos\_1e5\_1e4} & 40へ移行  &   8 & 497.864 & 0.386890 & 0.388630 & -0.003616 & 1.000000 \\
+\texttt{mode}                    & 100のまま & 113 & 72.381 & 0.000141 & 0.000142 &  0.000001 & 0.973451 \\
+\texttt{mode}                    & 40へ移行  &   8 & 497.864 & 0.000159 & 0.000155 & -0.000004 & 1.000000 \\
+\bottomrule
+\end{longtable}
+\normalsize
+
+\section{RD balance test 詳細}
+
+各 outcome について，pre-reform covariates として，
+当該 outcome 自身と pre round lot を除く
+\texttt{20251031} 列を balance test に使っている．
+
+\small
+\begin{longtable}{p{0.18\linewidth}p{0.28\linewidth}r r r r}
+\toprule
+outcome & covariate & 推定値 & p値 & 95\% CI 下限 & 95\% CI 上限 \\
+\midrule
+\endhead
+\texttt{cross\_k\_neg\_1e3\_1e4} & \texttt{cross\_k\_pos\_1e4\_1e3\_20251031} & -8.307842 & 0.000014 & -12.061481 & -4.554203 \\
+\texttt{cross\_k\_neg\_1e3\_1e4} & \texttt{cross\_k\_neg\_1e4\_1e5\_20251031} & -0.806629 & 0.000061 & -1.201112 & -0.412145 \\
+\texttt{cross\_k\_neg\_1e3\_1e4} & \texttt{cross\_k\_neg\_1e5\_0\_20251031}   & -0.104168 & 0.000074 & -0.155691 & -0.052646 \\
+\texttt{cross\_k\_neg\_1e3\_1e4} & \texttt{cross\_k\_pos\_1e5\_1e4\_20251031} & -0.867424 & 0.000080 & -1.298330 & -0.436518 \\
+\texttt{cross\_k\_neg\_1e3\_1e4} & \texttt{cross\_k\_pos\_0\_1e5\_20251031}   & -0.062949 & 0.015566 & -0.113954 & -0.011944 \\
+\texttt{cross\_k\_neg\_1e3\_1e4} & \texttt{mode\_20251031}                    & -0.000027 & 0.204805 & -0.000069 &  0.000015 \\
+\texttt{cross\_k\_neg\_1e4\_1e5} & \texttt{cross\_k\_pos\_1e4\_1e3\_20251031} & -8.307842 & 0.000014 & -12.061481 & -4.554203 \\
+\texttt{cross\_k\_neg\_1e4\_1e5} & \texttt{cross\_k\_neg\_1e3\_1e4\_20251031} & -3.794987 & 0.000060 & -5.648330 & -1.941645 \\
+\texttt{cross\_k\_neg\_1e4\_1e5} & \texttt{cross\_k\_neg\_1e5\_0\_20251031}   & -0.104168 & 0.000074 & -0.155691 & -0.052646 \\
+\texttt{cross\_k\_neg\_1e4\_1e5} & \texttt{cross\_k\_pos\_1e5\_1e4\_20251031} & -0.867424 & 0.000080 & -1.298330 & -0.436518 \\
+\texttt{cross\_k\_neg\_1e4\_1e5} & \texttt{cross\_k\_pos\_0\_1e5\_20251031}   & -0.062949 & 0.015566 & -0.113954 & -0.011944 \\
+\texttt{cross\_k\_neg\_1e4\_1e5} & \texttt{mode\_20251031}                    & -0.000027 & 0.204805 & -0.000069 &  0.000015 \\
+\texttt{cross\_k\_neg\_1e5\_0}   & \texttt{cross\_k\_pos\_1e4\_1e3\_20251031} & -8.307842 & 0.000014 & -12.061481 & -4.554203 \\
+\texttt{cross\_k\_neg\_1e5\_0}   & \texttt{cross\_k\_neg\_1e3\_1e4\_20251031} & -3.794987 & 0.000060 & -5.648330 & -1.941645 \\
+\texttt{cross\_k\_neg\_1e5\_0}   & \texttt{cross\_k\_neg\_1e4\_1e5\_20251031} & -0.806629 & 0.000061 & -1.201112 & -0.412145 \\
+\texttt{cross\_k\_neg\_1e5\_0}   & \texttt{cross\_k\_pos\_1e5\_1e4\_20251031} & -0.867424 & 0.000080 & -1.298330 & -0.436518 \\
+\texttt{cross\_k\_neg\_1e5\_0}   & \texttt{cross\_k\_pos\_0\_1e5\_20251031}   & -0.062949 & 0.015566 & -0.113954 & -0.011944 \\
+\texttt{cross\_k\_neg\_1e5\_0}   & \texttt{mode\_20251031}                    & -0.000027 & 0.204805 & -0.000069 &  0.000015 \\
+\texttt{cross\_k\_pos\_0\_1e5}   & \texttt{cross\_k\_pos\_1e4\_1e3\_20251031} & -8.307842 & 0.000014 & -12.061481 & -4.554203 \\
+\texttt{cross\_k\_pos\_0\_1e5}   & \texttt{cross\_k\_neg\_1e3\_1e4\_20251031} & -3.794987 & 0.000060 & -5.648330 & -1.941645 \\
+\texttt{cross\_k\_pos\_0\_1e5}   & \texttt{cross\_k\_neg\_1e4\_1e5\_20251031} & -0.806629 & 0.000061 & -1.201112 & -0.412145 \\
+\texttt{cross\_k\_pos\_0\_1e5}   & \texttt{cross\_k\_neg\_1e5\_0\_20251031}   & -0.104168 & 0.000074 & -0.155691 & -0.052646 \\
+\texttt{cross\_k\_pos\_0\_1e5}   & \texttt{cross\_k\_pos\_1e5\_1e4\_20251031} & -0.867424 & 0.000080 & -1.298330 & -0.436518 \\
+\texttt{cross\_k\_pos\_0\_1e5}   & \texttt{mode\_20251031}                    & -0.000027 & 0.204805 & -0.000069 &  0.000015 \\
+\texttt{cross\_k\_pos\_1e4\_1e3} & \texttt{cross\_k\_neg\_1e3\_1e4\_20251031} & -3.794987 & 0.000060 & -5.648330 & -1.941645 \\
+\texttt{cross\_k\_pos\_1e4\_1e3} & \texttt{cross\_k\_neg\_1e4\_1e5\_20251031} & -0.806629 & 0.000061 & -1.201112 & -0.412145 \\
+\texttt{cross\_k\_pos\_1e4\_1e3} & \texttt{cross\_k\_neg\_1e5\_0\_20251031}   & -0.104168 & 0.000074 & -0.155691 & -0.052646 \\
+\texttt{cross\_k\_pos\_1e4\_1e3} & \texttt{cross\_k\_pos\_1e5\_1e4\_20251031} & -0.867424 & 0.000080 & -1.298330 & -0.436518 \\
+\texttt{cross\_k\_pos\_1e4\_1e3} & \texttt{cross\_k\_pos\_0\_1e5\_20251031}   & -0.062949 & 0.015566 & -0.113954 & -0.011944 \\
+\texttt{cross\_k\_pos\_1e4\_1e3} & \texttt{mode\_20251031}                    & -0.000027 & 0.204805 & -0.000069 &  0.000015 \\
+\texttt{cross\_k\_pos\_1e5\_1e4} & \texttt{cross\_k\_pos\_1e4\_1e3\_20251031} & -8.307842 & 0.000014 & -12.061481 & -4.554203 \\
+\texttt{cross\_k\_pos\_1e5\_1e4} & \texttt{cross\_k\_neg\_1e3\_1e4\_20251031} & -3.794987 & 0.000060 & -5.648330 & -1.941645 \\
+\texttt{cross\_k\_pos\_1e5\_1e4} & \texttt{cross\_k\_neg\_1e4\_1e5\_20251031} & -0.806629 & 0.000061 & -1.201112 & -0.412145 \\
+\texttt{cross\_k\_pos\_1e5\_1e4} & \texttt{cross\_k\_neg\_1e5\_0\_20251031}   & -0.104168 & 0.000074 & -0.155691 & -0.052646 \\
+\texttt{cross\_k\_pos\_1e5\_1e4} & \texttt{cross\_k\_pos\_0\_1e5\_20251031}   & -0.062949 & 0.015566 & -0.113954 & -0.011944 \\
+\texttt{cross\_k\_pos\_1e5\_1e4} & \texttt{mode\_20251031}                    & -0.000027 & 0.204805 & -0.000069 &  0.000015 \\
+\texttt{mode}                    & \texttt{cross\_k\_pos\_1e4\_1e3\_20251031} & -8.307842 & 0.000014 & -12.061481 & -4.554203 \\
+\texttt{mode}                    & \texttt{cross\_k\_neg\_1e3\_1e4\_20251031} & -3.794987 & 0.000060 & -5.648330 & -1.941645 \\
+\texttt{mode}                    & \texttt{cross\_k\_neg\_1e4\_1e5\_20251031} & -0.806629 & 0.000061 & -1.201112 & -0.412145 \\
+\texttt{mode}                    & \texttt{cross\_k\_neg\_1e5\_0\_20251031}   & -0.104168 & 0.000074 & -0.155691 & -0.052646 \\
+\texttt{mode}                    & \texttt{cross\_k\_pos\_1e5\_1e4\_20251031} & -0.867424 & 0.000080 & -1.298330 & -0.436518 \\
+\texttt{mode}                    & \texttt{cross\_k\_pos\_0\_1e5\_20251031}   & -0.062949 & 0.015566 & -0.113954 & -0.011944 \\
+\bottomrule
+\end{longtable}
+\normalsize
+
+\section{再現上の注意点}
+
+\begin{itemize}
+  \item 日次終値は \texttt{yfinance} 依存なので，ネットワーク状況や取得失敗により
+        \(\bar{p}^{\mathrm{close}}_s\) の欠損が増える可能性がある．
+  \item panel notebook では \texttt{run\_id} を空欄にすると latest directory を
+        自動採用するため，共同研究者へ共有する際は必ず明示的に run 名を入れる．
+  \item RD の既存成果物では dirty worktree が前提になっているので，
+        完全一致よりも sample size，係数，信頼区間の整合をまず確認するべきである．
+  \item \texttt{notebooks/m\_trade\_quote\_round\_lot\_effects.py} と
+        \texttt{notebooks/m\_trade\_quote\_rd\_250.py} は現時点では working tree 上の
+        notebook を前提としている．
+\end{itemize}
+
+\end{document}
