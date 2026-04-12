@@ -23,13 +23,21 @@ quote は `Symbol` の先頭文字に対応する shard を自動で解決しま
 
 ## Main Commands
 
-filtered parquet をまとめて生成する主入口は次です。
+filtered parquet の CLI は trade / quote で分かれています。
+
+trade parquet の生成:
 
 ```bash
-uv run --with-editable . -m taq_llag_analysis.preprocess.write_all_trade_quote_parquets
+uv run --with-editable . -m taq_llag_analysis.preprocess.trade_cli
 ```
 
-- 全銘柄を対象にまとめて書き出す CLI です。
+quote parquet の生成:
+
+```bash
+uv run --with-editable . -m taq_llag_analysis.preprocess.quote_cli
+```
+
+- どちらも全銘柄を対象に書き出します。
 - 対象日付は既定で `TARGET_DATES=("20251031", "20251103")` を使います。
 - 既定の出力列は最小構成です。
   - trade: `Exchange`, `Participant Timestamp`
@@ -113,17 +121,31 @@ write_filtered_quote_parquets(
 PY
 ```
 
-batch writer を Python から使って日付や列を変える例:
+trade CLI helper を Python から使って日付や列を変える例:
 
 ```bash
 uv run --with-editable . python - <<'PY'
-from taq_llag_analysis.preprocess.write_all_trade_quote_parquets import build_summary
+from taq_llag_analysis.preprocess.trade_cli import build_trade_summary
 
-summary = build_summary(
+summary = build_trade_summary(
     target_dates=("20251031",),
     symbol_prefix="M",
-    trade_columns=("Exchange", "Participant Timestamp"),
-    quote_columns=("Exchange", "Participant_Timestamp"),
+    columns=("Exchange", "Participant Timestamp"),
+)
+print(summary)
+PY
+```
+
+quote CLI helper を Python から使う例:
+
+```bash
+uv run --with-editable . python - <<'PY'
+from taq_llag_analysis.preprocess.quote_cli import build_quote_summary
+
+summary = build_quote_summary(
+    target_dates=("20251031",),
+    symbol_prefix="M",
+    columns=("Exchange", "Participant_Timestamp"),
 )
 print(summary)
 PY
@@ -132,12 +154,11 @@ PY
 ## Logging
 
 - writer は `INFO` ログで開始時、collect 完了時、書き出し完了時の概要を出します。
-- batch writer を CLI で実行すると `logging.basicConfig(level=logging.INFO, ...)` を設定するため、標準出力に進行状況が出ます。
-- 全銘柄 CLI でも `INFO` ログを出します。
+- trade / quote CLI はそれぞれ `logging.basicConfig(level=logging.INFO, ...)` を設定するため、標準出力に進行状況が出ます。
+- CLI では少なくとも次を出します。
   - batch 開始
   - date ごとの開始と完了
-  - trade writer の collect / write
-  - quote writer の collect / write
+  - writer の collect / write
 
 ## Validation
 
