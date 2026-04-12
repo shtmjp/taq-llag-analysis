@@ -12,7 +12,7 @@ import numpy as np
 import polars as pl
 import ppllag
 
-from write_m_trade_quote_mode_summary import (
+from .write_m_trade_quote_mode_summary import (
     ALLOW_NOT_SIMPLE,
     KERNEL,
     OBS_WINDOW,

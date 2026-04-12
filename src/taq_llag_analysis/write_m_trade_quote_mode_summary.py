@@ -17,7 +17,7 @@ import ppllag
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
-from write_m_trade_quote_parquets import symbols_with_prefix
+from .preprocess._daily_taq import symbols_with_prefix
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
