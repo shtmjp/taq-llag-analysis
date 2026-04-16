@@ -42,7 +42,7 @@ def _(Path):
 
 @app.cell
 def _(Path, input_csv_path, output_base_dir):
-    panel_base_dir = Path("data/derived/m_trade_quote_mode_symbol_panel")
+    panel_base_dir = Path("data/derived/trade_quote_mode_symbol_panel")
     if input_csv_path is None:
         candidate_paths = sorted(panel_base_dir.glob("*_with_round_lot_sep2025_mean_close.csv"))
         if not candidate_paths:

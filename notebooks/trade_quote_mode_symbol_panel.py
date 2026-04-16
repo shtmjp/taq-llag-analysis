@@ -17,9 +17,9 @@ def _():
 
 @app.cell
 def _(Path):
-    results_base_dir = Path("data/derived/m_trade_quote_modes")
+    results_base_dir = Path("data/derived/trade_quote_modes")
     master_base_dir = Path("data/dailyTAQ/MASTER")
-    output_base_dir = Path("data/derived/m_trade_quote_mode_symbol_panel")
+    output_base_dir = Path("data/derived/trade_quote_mode_symbol_panel")
     run_id = ""
     trade_exchange = "Q"
     quote_exchange = "Z"
