@@ -25,8 +25,7 @@ if TYPE_CHECKING:
 
 TRADE_BASE_DIR = Path("data/filtered/trade")
 QUOTE_BASE_DIR = Path("data/filtered/quote")
-OUTPUT_BASE_DIR = Path("data/derived/m_trade_quote_modes")
-SYMBOL_PREFIX = "M"
+OUTPUT_BASE_DIR = Path("data/derived/trade_quote_modes")
 TARGET_DATES: tuple[str, ...] = ("20251031", "20251103")
 MIN_EVENTS_PER_SIDE = 100
 N_JOBS = 1
@@ -292,7 +291,6 @@ def _count_shared_event_times(
 def _scan_symbols(
     *,
     target_dates: Sequence[str],
-    symbol_prefix: str,
     symbols: Sequence[str] | None,
     max_symbols: int | None,
 ) -> tuple[list[_SymbolScan], dict[str, list[str]]]:
@@ -301,7 +299,7 @@ def _scan_symbols(
     symbols_by_date: dict[str, list[str]] = {}
 
     for date_yyyymmdd in target_dates:
-        date_symbols = symbols_with_prefix(date_yyyymmdd, symbol_prefix)
+        date_symbols = symbols_with_prefix(date_yyyymmdd, "")
         if selected_symbols is not None:
             date_symbols = [symbol for symbol in date_symbols if symbol in selected_symbols]
         if max_symbols is not None:
@@ -339,7 +337,6 @@ def _scan_symbols(
 
 def _run_id(
     *,
-    symbol_prefix: str,
     target_dates: Sequence[str],
     min_events_per_side: int,
     created_at: datetime,
@@ -348,7 +345,7 @@ def _run_id(
     dates_token = "-".join(target_dates)
     timestamp_token = created_at.strftime("%Y%m%dT%H%M%SZ")
     subset_token = "_subset" if subset_requested else ""
-    return f"{symbol_prefix}_{dates_token}_min{min_events_per_side}{subset_token}_{timestamp_token}"
+    return f"{dates_token}_min{min_events_per_side}{subset_token}_{timestamp_token}"
 
 
 def _scan_jobs(
@@ -381,7 +378,6 @@ def _run_config_dict(
     run_id: str,
     created_at: datetime,
     target_dates: Sequence[str],
-    symbol_prefix: str,
     min_events_per_side: int,
     n_jobs: int,
     max_symbols: int | None,
@@ -407,7 +403,6 @@ def _run_config_dict(
             "tqdm": _package_version("tqdm"),
         },
         "git": git_metadata,
-        "symbol_prefix": symbol_prefix,
         "target_dates": list(target_dates),
         "selected_symbols": list(selected_symbols) if selected_symbols is not None else None,
         "symbols_by_date": {
@@ -635,7 +630,6 @@ def _scan_results(
 def build_mode_summary(
     *,
     target_dates: Sequence[str] = TARGET_DATES,
-    symbol_prefix: str = SYMBOL_PREFIX,
     symbols: Sequence[str] | None = None,
     max_symbols: int | None = None,
     max_pairs: int | None = None,
@@ -644,16 +638,15 @@ def build_mode_summary(
     output_base_dir: Path = OUTPUT_BASE_DIR,
     show_progress: bool = True,
 ) -> Path:
-    """Run the M-prefix trade-vs-quote batch study and write CSV/JSON artifacts.
+    """Run the trade-vs-quote batch study and write CSV/JSON artifacts.
 
     Parameters
     ----------
     target_dates
         Trading dates formatted as ``YYYYMMDD``.
-    symbol_prefix
-        Prefix used to select symbols from the Daily TAQ master file.
     symbols
-        Optional exact symbol whitelist applied after the prefix filter.
+        Optional exact symbol whitelist applied after loading all available
+        symbols for each date.
     max_symbols
         Optional limit on the number of symbols per date, preserving sorted order.
     max_pairs
@@ -678,14 +671,12 @@ def build_mode_summary(
     """
     scans, symbols_by_date = _scan_symbols(
         target_dates=target_dates,
-        symbol_prefix=symbol_prefix,
         symbols=symbols,
         max_symbols=max_symbols,
     )
     scan_jobs, total_progress_pairs = _scan_jobs(scans, max_pairs)
     created_at = datetime.now(UTC)
     run_id = _run_id(
-        symbol_prefix=symbol_prefix,
         target_dates=target_dates,
         min_events_per_side=min_events_per_side,
         created_at=created_at,
@@ -698,7 +689,6 @@ def build_mode_summary(
         run_id=run_id,
         created_at=created_at,
         target_dates=target_dates,
-        symbol_prefix=symbol_prefix,
         min_events_per_side=min_events_per_side,
         n_jobs=n_jobs,
         max_symbols=max_symbols,
@@ -791,15 +781,10 @@ def main() -> int:
         help="Trading date formatted as YYYYMMDD. Repeat to pass multiple dates.",
     )
     parser.add_argument(
-        "--symbol-prefix",
-        default=SYMBOL_PREFIX,
-        help="Ticker prefix used to select symbols from the master file.",
-    )
-    parser.add_argument(
         "--symbol",
         dest="symbols",
         action="append",
-        help="Exact symbol to include after the prefix filter. Repeat as needed.",
+        help="Exact symbol to include. Repeat as needed.",
     )
     parser.add_argument(
         "--max-symbols",
@@ -840,7 +825,6 @@ def main() -> int:
 
     run_dir = build_mode_summary(
         target_dates=tuple(args.dates) if args.dates else TARGET_DATES,
-        symbol_prefix=args.symbol_prefix,
         symbols=tuple(args.symbols) if args.symbols else None,
         max_symbols=args.max_symbols,
         max_pairs=args.max_pairs,

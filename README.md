@@ -46,13 +46,13 @@ uv run --with-editable . -m taq_llag_analysis.preprocess.quote_cli
 mode summary の生成:
 
 ```bash
-uv run --with-editable . -m taq_llag_analysis.write_m_trade_quote_mode_summary --date 20251031 --date 20251103 --symbol-prefix M --n-jobs 1
+uv run --with-editable . -m taq_llag_analysis.write_trade_quote_mode_summary --date 20251031 --date 20251103 --n-jobs 1
 ```
 
 CPCF example 図の生成:
 
 ```bash
-uv run --with-editable . -m taq_llag_analysis.write_m_trade_quote_cpcf_examples --run-id <mode-summary-run-id> --symbol MORN --symbol MAR
+uv run --with-editable . -m taq_llag_analysis.write_trade_quote_cpcf_examples --run-id <mode-summary-run-id> --symbol MORN --symbol MAR
 ```
 
 yfinance の平均終値テーブル生成:
@@ -72,7 +72,7 @@ filtered parquet と監査 JSON の出力先:
 
 mode summary の出力先:
 
-- `data/derived/m_trade_quote_modes/<run_id>/`
+- `data/derived/trade_quote_modes/<run_id>/`
 - 主な生成物:
   - `run_config.json`
   - `pair_summary.csv`

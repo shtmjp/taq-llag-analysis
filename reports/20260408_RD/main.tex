@@ -540,22 +540,21 @@ cross-K は次の 6 区間で評価する．
 uv sync
 \end{verbatim}
 
-  \item M 接頭辞銘柄について filtered parquet を作る．
+  \item 全銘柄について filtered parquet を作る．
 \begin{verbatim}
 uv run python src/write_m_trade_quote_parquets.py
 \end{verbatim}
 
   \item mode summary を計算する．
 \begin{verbatim}
-uv run python src/write_m_trade_quote_mode_summary.py \
+uv run python -m taq_llag_analysis.write_trade_quote_mode_summary \
   --date 20251031 \
   --date 20251103 \
-  --symbol-prefix M \
   --min-events-per-side 100 \
   --n-jobs 8
 \end{verbatim}
 
-  \item \texttt{notebooks/m\_trade\_quote\_mode\_symbol\_panel.py} を開き，
+  \item \texttt{notebooks/trade\_quote\_mode\_symbol\_panel.py} を開き，
         \texttt{run\_id} に直前の run directory 名を明示入力して全セル実行する．
 \end{enumerate}
 

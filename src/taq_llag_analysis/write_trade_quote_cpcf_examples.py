@@ -12,7 +12,7 @@ import numpy as np
 import polars as pl
 import ppllag
 
-from .write_m_trade_quote_mode_summary import (
+from .write_trade_quote_mode_summary import (
     ALLOW_NOT_SIMPLE,
     KERNEL,
     OBS_WINDOW,
@@ -35,8 +35,8 @@ DEFAULT_SYMBOLS: tuple[str, ...] = ("MORN", "MAR", "MDB", "MSFT")
 DEFAULT_DATES: tuple[str, ...] = ("20251031", "20251103")
 DEFAULT_TRADE_EXCHANGE = "Q"
 DEFAULT_QUOTE_EXCHANGE = "Z"
-OUTPUT_BASE_DIR = Path("data/derived/m_trade_quote_cpcf_examples")
-MODE_RUN_OUTPUT_BASE_DIR = Path("data/derived/m_trade_quote_modes")
+OUTPUT_BASE_DIR = Path("data/derived/trade_quote_cpcf_examples")
+MODE_RUN_OUTPUT_BASE_DIR = Path("data/derived/trade_quote_modes")
 
 
 def _u_grid() -> np.ndarray:
