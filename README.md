@@ -46,7 +46,7 @@ uv run --with-editable . -m taq_llag_analysis.preprocess.quote_cli
 mode summary の生成:
 
 ```bash
-uv run --with-editable . -m taq_llag_analysis.write_trade_quote_mode_summary --date 20251031 --date 20251103 --n-jobs 1
+uv run --with-editable . -m taq_llag_analysis.write_trade_quote_mode_summary --date 20251031 --date 20251103 --n-jobs 1 --output-dir data/derived/trade_quote_modes/my-run
 ```
 
 CPCF example 図の生成:
@@ -74,8 +74,7 @@ mode summary の出力先:
 
 - `data/derived/trade_quote_modes/<run_id>/`
 - 主な生成物:
-  - `run_config.json`
-  - `pair_summary.csv`
+  - `cross_k_summary.csv`
   - `modes.csv`
 
 監査 JSON には少なくとも次が残ります。

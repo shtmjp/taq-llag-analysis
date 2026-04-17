@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-RAW_ROOT_DIR = Path("/Users/shiotanitenshou/Research/datasets/dailytaq2")
+RAW_ROOT_DIR = Path("data/datasets/dailytaq2")
 TRADE_OUTPUT_DIR = Path("data/filtered/trade")
 QUOTE_OUTPUT_DIR = Path("data/filtered/quote")
 TRADE_AUDIT_DIR = TRADE_OUTPUT_DIR / "_audit"

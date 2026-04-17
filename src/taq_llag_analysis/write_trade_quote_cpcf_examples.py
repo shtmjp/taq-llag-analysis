@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,16 +14,16 @@ import numpy as np
 import polars as pl
 import ppllag
 
-from .write_trade_quote_mode_summary import (
+from ._trade_quote_common import (
     ALLOW_NOT_SIMPLE,
+    CROSS_K_SUMMARY_FILENAME,
     KERNEL,
+    MODE_SUMMARY_OUTPUT_BASE_DIR,
+    MODES_FILENAME,
     OBS_WINDOW,
     QUOTE_BASE_DIR,
     TRADE_BASE_DIR,
-    U_GRID_SPEC,
     _event_arrays_by_exchange,
-    _git_metadata,
-    _package_version,
 )
 
 mpl.use("Agg")
@@ -36,7 +38,12 @@ DEFAULT_DATES: tuple[str, ...] = ("20251031", "20251103")
 DEFAULT_TRADE_EXCHANGE = "Q"
 DEFAULT_QUOTE_EXCHANGE = "Z"
 OUTPUT_BASE_DIR = Path("data/derived/trade_quote_cpcf_examples")
-MODE_RUN_OUTPUT_BASE_DIR = Path("data/derived/trade_quote_modes")
+U_GRID_SPEC: dict[str, object] = {
+    "start": -1e-3,
+    "stop": 1e-3,
+    "num": 2001,
+    "dtype": "float64",
+}
 
 
 def _u_grid() -> np.ndarray:
@@ -48,29 +55,57 @@ def _u_grid() -> np.ndarray:
     )
 
 
-def _pair_summary_frame(run_dir: Path) -> pl.DataFrame:
+def _package_version(name: str) -> str | None:
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return None
+
+
+def _git_output(args: Sequence[str]) -> str | None:
+    completed = subprocess.run(  # noqa: S603
+        args,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
+def _git_metadata() -> dict[str, object]:
+    git_sha = _git_output(("git", "rev-parse", "HEAD"))
+    git_status = _git_output(("git", "status", "--short"))
+    return {
+        "commit_sha": git_sha,
+        "dirty": bool(git_status),
+    }
+
+
+def _cross_k_summary_frame(run_dir: Path) -> pl.DataFrame:
     return pl.read_csv(
-        run_dir / "pair_summary.csv",
+        run_dir / CROSS_K_SUMMARY_FILENAME,
         schema_overrides={"date_yyyymmdd": pl.String},
     )
 
 
 def _modes_frame(run_dir: Path) -> pl.DataFrame:
     return pl.read_csv(
-        run_dir / "modes.csv",
+        run_dir / MODES_FILENAME,
         schema_overrides={"date_yyyymmdd": pl.String},
     )
 
 
-def _pair_row(
-    pair_summary_df: pl.DataFrame,
+def _cross_k_row(
+    cross_k_summary_df: pl.DataFrame,
     *,
     symbol: str,
     date_yyyymmdd: str,
     trade_exchange: str,
     quote_exchange: str,
 ) -> dict[str, object]:
-    match_df = pair_summary_df.filter(
+    match_df = cross_k_summary_df.filter(
         (pl.col("symbol") == symbol)
         & (pl.col("date_yyyymmdd") == date_yyyymmdd)
         & (pl.col("trade_exchange") == trade_exchange)
@@ -78,7 +113,7 @@ def _pair_row(
     )
     if match_df.height != 1:
         msg = (
-            "Expected one pair-summary row for "
+            "Expected one cross-k summary row for "
             f"{symbol=} {date_yyyymmdd=} {trade_exchange=} {quote_exchange=}, "
             f"found {match_df.height}."
         )
@@ -251,11 +286,11 @@ def build_cpcf_examples(
         Output directory containing the PNG figures and manifest files.
 
     """
-    source_run_dir = MODE_RUN_OUTPUT_BASE_DIR / run_id
+    source_run_dir = MODE_SUMMARY_OUTPUT_BASE_DIR / run_id
     output_dir = output_base_dir / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    pair_summary_df = _pair_summary_frame(source_run_dir)
+    cross_k_summary_df = _cross_k_summary_frame(source_run_dir)
     modes_df = _modes_frame(source_run_dir)
     u_values = _u_grid()
 
@@ -266,8 +301,8 @@ def build_cpcf_examples(
         date_panels: list[dict[str, object]] = []
         png_path = output_dir / f"cpcf__{symbol}.png"
         for date_yyyymmdd in dates:
-            pair_row = _pair_row(
-                pair_summary_df,
+            cross_k_row = _cross_k_row(
+                cross_k_summary_df,
                 symbol=symbol,
                 date_yyyymmdd=date_yyyymmdd,
                 trade_exchange=trade_exchange,
@@ -286,8 +321,8 @@ def build_cpcf_examples(
                 trade_exchange=trade_exchange,
                 quote_exchange=quote_exchange,
             )
-            bandwidth = float(pair_row["bandwidth"])
-            closest_mode_to_zero_sec = float(pair_row["closest_mode_to_zero_sec"])
+            bandwidth = float(cross_k_row["bandwidth"])
+            closest_mode_to_zero_sec = float(cross_k_row["closest_mode_to_zero_sec"])
             cpcf_values = np.asarray(
                 ppllag.cpcf(
                     trade_event_times,
@@ -345,8 +380,8 @@ def build_cpcf_examples(
         "run_id": run_id,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "source_run_dir": str(source_run_dir),
-        "pair_summary_csv": str(source_run_dir / "pair_summary.csv"),
-        "modes_csv": str(source_run_dir / "modes.csv"),
+        "cross_k_summary_csv": str(source_run_dir / CROSS_K_SUMMARY_FILENAME),
+        "modes_csv": str(source_run_dir / MODES_FILENAME),
         "output_dir": str(output_dir),
         "trade_base_dir": str(TRADE_BASE_DIR),
         "quote_base_dir": str(QUOTE_BASE_DIR),
