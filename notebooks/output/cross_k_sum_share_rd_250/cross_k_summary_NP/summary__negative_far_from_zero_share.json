@@ -1,0 +1,51 @@
+{
+  "status": "ok",
+  "outcome": "negative_far_from_zero_share",
+  "display_name": "Negative far-from-zero share",
+  "side": "negative",
+  "family": "share",
+  "transform": "signed",
+  "cutoff": 250.0,
+  "upper_bound": 1000.0,
+  "enforce_rule_consistency": true,
+  "density_status": "omitted",
+  "density_reason": "rddensity is incompatible with pandas 3 in the current environment.",
+  "n_total_raw": 3877,
+  "analysis_sample_csv": "output/cross_k_sum_share_rd_250/cross_k_summary_NP/analysis_sample__negative_far_from_zero_share.csv",
+  "balance_tests_csv": "output/cross_k_sum_share_rd_250/cross_k_summary_NP/balance__negative_far_from_zero_share.csv",
+  "plot_png": "output/cross_k_sum_share_rd_250/cross_k_summary_NP/rd_plot__negative_far_from_zero_share.png",
+  "summary_json": "output/cross_k_sum_share_rd_250/cross_k_summary_NP/summary__negative_far_from_zero_share.json",
+  "n_analysis": 1686,
+  "n_left": 1579,
+  "n_right": 107,
+  "n_actual_treated": 107,
+  "n_rule_consistent": 1686,
+  "rdrobust": {
+    "coef_conventional": -0.03099544894581617,
+    "coef_bias_corrected": -0.03248689802548993,
+    "coef_robust": -0.03248689802548993,
+    "ci_conventional": [
+      -0.06536336293463389,
+      0.003372465043001552
+    ],
+    "ci_bias_corrected": [
+      -0.06685481201430765,
+      0.0018810159633277923
+    ],
+    "ci_robust": [
+      -0.07419514617027387,
+      0.009221350119294001
+    ],
+    "p_conventional": 0.07712176777627561,
+    "p_bias_corrected": 0.0639265557336484,
+    "p_robust": 0.1268525223744353,
+    "bandwidth_h_left": 87.95285296553752,
+    "bandwidth_h_right": 87.95285296553752,
+    "bandwidth_b_left": 138.85912065996703,
+    "bandwidth_b_right": 138.85912065996703,
+    "bandwidth_source": "automatic",
+    "fallback_info": null,
+    "auto_error": null
+  },
+  "n_balance_tests": 8
+}

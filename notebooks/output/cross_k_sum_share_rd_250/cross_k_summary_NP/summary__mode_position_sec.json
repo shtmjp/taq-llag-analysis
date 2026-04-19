@@ -1,0 +1,51 @@
+{
+  "status": "ok",
+  "outcome": "mode_position_sec",
+  "display_name": "Mode position (sec)",
+  "side": "overall",
+  "family": "mode",
+  "transform": "signed",
+  "cutoff": 250.0,
+  "upper_bound": 1000.0,
+  "enforce_rule_consistency": true,
+  "density_status": "omitted",
+  "density_reason": "rddensity is incompatible with pandas 3 in the current environment.",
+  "n_total_raw": 3877,
+  "analysis_sample_csv": "output/cross_k_sum_share_rd_250/cross_k_summary_NP/analysis_sample__mode_position_sec.csv",
+  "balance_tests_csv": "output/cross_k_sum_share_rd_250/cross_k_summary_NP/balance__mode_position_sec.csv",
+  "plot_png": "output/cross_k_sum_share_rd_250/cross_k_summary_NP/rd_plot__mode_position_sec.png",
+  "summary_json": "output/cross_k_sum_share_rd_250/cross_k_summary_NP/summary__mode_position_sec.json",
+  "n_analysis": 1688,
+  "n_left": 1581,
+  "n_right": 107,
+  "n_actual_treated": 107,
+  "n_rule_consistent": 1688,
+  "rdrobust": {
+    "coef_conventional": -2.7225200210956017e-05,
+    "coef_bias_corrected": -2.727901443675072e-05,
+    "coef_robust": -2.727901443675072e-05,
+    "ci_conventional": [
+      -9.242514531950626e-05,
+      3.797474489759422e-05
+    ],
+    "ci_bias_corrected": [
+      -9.247895954530097e-05,
+      3.7920930671799523e-05
+    ],
+    "ci_robust": [
+      -0.00010570746762752101,
+      5.114943875401957e-05
+    ],
+    "p_conventional": 0.4131220208746589,
+    "p_bias_corrected": 0.41219922515928253,
+    "p_robust": 0.4954189157099479,
+    "bandwidth_h_left": 39.540147235720724,
+    "bandwidth_h_right": 39.540147235720724,
+    "bandwidth_b_left": 65.65531380335297,
+    "bandwidth_b_right": 65.65531380335297,
+    "bandwidth_source": "automatic",
+    "fallback_info": null,
+    "auto_error": null
+  },
+  "n_balance_tests": 8
+}
