@@ -1,5 +1,6 @@
 {
     "recommendations": [
+        "James-Yu.latex-workshop",
         "charliermarsh.ruff",
         "codezombiech.gitignore",
         "eamodio.gitlens",

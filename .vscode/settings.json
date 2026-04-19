@@ -3,6 +3,27 @@
     "python.analysis.autoFormatStrings": true,
     "files.insertFinalNewline": true,
     "files.trimTrailingWhitespace": true,
+    "latex-workshop.latex.autoBuild.run": "onSave",
+    "latex-workshop.latex.outDir": "%DIR%/out",
+    "latex-workshop.latex.recipe.default": "first",
+    "latex-workshop.latex.recipes": [
+        {
+            "name": "latexmk (uplatex)",
+            "tools": [
+                "latexmk-uplatex"
+            ]
+        }
+    ],
+    "latex-workshop.latex.tools": [
+        {
+            "name": "latexmk-uplatex",
+            "command": "latexmk",
+            "args": [
+                "-cd",
+                "%DOC%"
+            ]
+        }
+    ],
     "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python",
     "python.testing.autoTestDiscoverOnSaveEnabled": false,
     "python.testing.pytestEnabled": true,
