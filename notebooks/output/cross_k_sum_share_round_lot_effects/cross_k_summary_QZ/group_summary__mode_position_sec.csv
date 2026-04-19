@@ -1,0 +1,4 @@
+group_label,group_order,outcome,display_name,side,family,transform,actual_transition,n_obs,mean_delta,median_delta,std_delta,mean_y_pre,mean_y_post
+stay100,0,mode_position_sec,Mode position (sec),overall,mode,signed,100->100,1937,-0.00038663817752590323,-2.430024324000024e-07,0.022696771527414276,0.0005322559313445989,0.00014561775381869565
+to40,1,mode_position_sec,Mode position (sec),overall,mode,signed,100->40,63,-3.17326928434127e-06,-2.3299799059999817e-07,4.2463764235068895e-05,0.00015482809514704603,0.00015165482586270476
+to10,2,mode_position_sec,Mode position (sec),overall,mode,signed,100->10,4,3.117649976049999e-05,-3.844997991099997e-06,8.226628033165194e-05,0.00013735749962500002,0.0001685339993855
