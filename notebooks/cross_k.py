@@ -1,12 +1,13 @@
 import marimo
 
-__generated_with = "0.22.5"
+__generated_with = "0.23.1"
 app = marimo.App(width="medium")
 
 
 @app.cell
 def _():
     import json
+    import sys
     from datetime import UTC, datetime
     from pathlib import Path
 
@@ -16,150 +17,224 @@ def _():
     import pandas as pd
     import statsmodels.api as sm
 
-    plt.rcParams["font.family"] = ["Hiragino Sans"]
-    plt.rcParams["axes.unicode_minus"] = False
+    src_dir = Path(__file__).resolve().parents[1] / "src"
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
 
-    return UTC, Path, datetime, json, mpimg, np, pd, plt, sm
+    from taq_llag_analysis.preprocess.daily_taq_paths import master_input_path
+
+    plt.rcParams["axes.unicode_minus"] = False
+    return Path, UTC, datetime, json, master_input_path, mpimg, np, pd, plt, sm
 
 
 @app.cell
 def _(Path):
-    input_csv_path = None
-    output_base_dir = Path("data/derived/m_trade_quote_round_lot_effects")
+    input_csv_path = Path("../data/derived/trade_quote_modes/my-run/cross_k_summary.csv")
+    output_base_dir = Path("../data/derived/cross_k_round_lot_effects")
+    trade_exchange = "Z"
+    quote_exchange = "Q"
+    date_pre = "20251031"
+    date_post = "20251103"
     pre_round_lot_required = 100.0
     allowed_post_round_lots = (100.0, 40.0)
     export_analysis_sample = True
     export_group_summary = True
+    cross_k_columns = [
+        "cross_k_neg_1e3_1e4",
+        "cross_k_neg_1e4_1e5",
+        "cross_k_neg_1e5_0",
+        "cross_k_pos_0_1e5",
+        "cross_k_pos_1e5_1e4",
+        "cross_k_pos_1e4_1e3",
+    ]
     return (
         allowed_post_round_lots,
+        cross_k_columns,
+        date_post,
+        date_pre,
         export_analysis_sample,
         export_group_summary,
         input_csv_path,
         output_base_dir,
         pre_round_lot_required,
+        quote_exchange,
+        trade_exchange,
     )
 
 
 @app.cell
-def _(Path, input_csv_path, output_base_dir):
-    panel_base_dir = Path("data/derived/trade_quote_mode_symbol_panel")
-    if input_csv_path is None:
-        candidate_paths = sorted(panel_base_dir.glob("*_with_round_lot_sep2025_mean_close.csv"))
-        if not candidate_paths:
-            message = f"No panel CSV files found under {panel_base_dir}."
-            raise FileNotFoundError(message)
-        resolved_input_csv_path = candidate_paths[-1]
-    else:
-        resolved_input_csv_path = Path(input_csv_path)
-
+def _(Path, input_csv_path, output_base_dir, quote_exchange, trade_exchange):
+    resolved_input_csv_path = Path(input_csv_path)
     if not resolved_input_csv_path.exists():
-        message = f"Panel CSV not found: {resolved_input_csv_path}"
+        message = f"cross_k summary not found: {resolved_input_csv_path}"
         raise FileNotFoundError(message)
 
-    panel_csv_stem = resolved_input_csv_path.stem
-    resolved_output_dir = output_base_dir / panel_csv_stem
+    input_csv_stem = resolved_input_csv_path.stem
+    pair_label = f"{trade_exchange}{quote_exchange}"
+    resolved_output_dir = output_base_dir / f"{input_csv_stem}_{pair_label}"
     resolved_output_dir.mkdir(parents=True, exist_ok=True)
-    return panel_csv_stem, resolved_input_csv_path, resolved_output_dir
+    return (
+        input_csv_stem,
+        pair_label,
+        resolved_input_csv_path,
+        resolved_output_dir,
+    )
 
 
 @app.cell
-def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
-    DATE_PRE = "20251031"
-    DATE_POST = "20251103"
-    PRICE_COL = "mean_close_202509"
-    PRE_RL_COL = "round_lot_20251031"
-    POST_RL_COL = "round_lot_20251103"
-    RULE_CUTOFF = 250.0
-    TREATED_POST_ROUND_LOT = 40.0
-    CONTROL_POST_ROUND_LOT = 100.0
+def _(
+    Path,
+    date_post,
+    date_pre,
+    datetime,
+    json,
+    master_input_path,
+    np,
+    pd,
+    plt,
+    sm,
+):
+    PRE_RL_COL = f"round_lot_{date_pre}"
+    POST_RL_COL = f"round_lot_{date_post}"
     MIN_GROUPS = 2
 
-    def infer_available_y_stems(columns):
-        """Infer outcome stems that exist on both dates.
+    def build_cross_k_panel(
+        summary_df,
+        *,
+        trade_exchange,
+        quote_exchange,
+        date_pre,
+        date_post,
+        cross_k_columns,
+    ):
+        """Build a symbol-level wide panel for the selected cross-k outcomes.
 
         Parameters
         ----------
-        columns
-            Column labels from the panel CSV.
+        summary_df
+            Long-form `cross_k_summary.csv` dataframe.
+        trade_exchange
+            Trade exchange code to keep.
+        quote_exchange
+            Quote exchange code to keep.
+        date_pre
+            Pre-reform date in `YYYYMMDD` format.
+        date_post
+            Post-reform date in `YYYYMMDD` format.
+        cross_k_columns
+            Outcome column names to pivot into wide form.
 
         Returns
         -------
-        list[str]
-            Sorted outcome stems excluding `round_lot`.
+        pandas.DataFrame
+            Symbol-level panel with one pre/post column pair per outcome.
 
         """
-        pre_suffix = f"_{DATE_PRE}"
-        post_suffix = f"_{DATE_POST}"
-        stems = []
-        for column_name in columns:
-            if not str(column_name).endswith(pre_suffix):
-                continue
-            stem = str(column_name)[: -len(pre_suffix)]
-            if stem == "round_lot":
-                continue
-            if f"{stem}{post_suffix}" in columns:
-                stems.append(stem)
-        return sorted(set(stems))
+        required_columns = [
+            "symbol",
+            "date_yyyymmdd",
+            "status",
+            "trade_exchange",
+            "quote_exchange",
+            *cross_k_columns,
+        ]
+        missing_columns = [
+            column_name for column_name in required_columns if column_name not in summary_df.columns
+        ]
+        if missing_columns:
+            message = f"Missing required columns: {missing_columns}"
+            raise KeyError(message)
 
-    def transform_for_outcome(y_stem):
-        """Map one outcome to its comparison transform.
+        selected_df = summary_df.copy()
+        selected_df["date_yyyymmdd"] = selected_df["date_yyyymmdd"].astype(str)
+        selected_df = selected_df.loc[
+            (selected_df["status"] == "ok")
+            & (selected_df["trade_exchange"] == trade_exchange)
+            & (selected_df["quote_exchange"] == quote_exchange)
+            & selected_df["date_yyyymmdd"].isin([date_pre, date_post]),
+            ["symbol", "date_yyyymmdd", *cross_k_columns],
+        ].copy()
+
+        wide_parts = []
+        for column_name in cross_k_columns:
+            wide_part = selected_df.pivot_table(
+                index="symbol",
+                columns="date_yyyymmdd",
+                values=column_name,
+                aggfunc="first",
+            )
+            wide_part = wide_part.reindex(columns=[date_pre, date_post])
+            wide_part = wide_part.rename(
+                columns={
+                    date_pre: f"{column_name}_{date_pre}",
+                    date_post: f"{column_name}_{date_post}",
+                },
+            )
+            wide_parts.append(wide_part)
+
+        wide_df = pd.concat(wide_parts, axis=1)
+        wide_df.index.name = "symbol"
+        return wide_df.sort_index().reset_index()
+
+    def load_round_lot_panel(*, date_pre, date_post):
+        """Load round-lot values from Daily TAQ master files.
 
         Parameters
         ----------
-        y_stem
-            Outcome stem inferred from the panel CSV.
+        date_pre
+            Pre-reform date in `YYYYMMDD` format.
+        date_post
+            Post-reform date in `YYYYMMDD` format.
 
         Returns
         -------
-        str
-            `signed` for `mode`, otherwise `log1p`.
+        pandas.DataFrame
+            Symbol-level wide dataframe with pre/post round-lot columns.
 
         """
-        return "signed" if y_stem == "mode" else "log1p"
+        master_frames = []
+        for date_yyyymmdd in (date_pre, date_post):
+            master_path = master_input_path(date_yyyymmdd)
+            if not master_path.exists():
+                message = f"Master file not found: {master_path}"
+                raise FileNotFoundError(message)
 
-    def get_outcome_columns(y_stem):
-        """Return the pre and post columns for an outcome.
+            master_df = pd.read_csv(
+                master_path,
+                sep="|",
+                encoding="latin1",
+                compression="gzip",
+                usecols=["Symbol", "Round_Lot"],
+            )
+            master_df = master_df.loc[master_df["Symbol"] != "END"].copy()
+            master_df["date_yyyymmdd"] = date_yyyymmdd
+            master_df = master_df.rename(
+                columns={
+                    "Symbol": "symbol",
+                    "Round_Lot": "round_lot",
+                },
+            )
+            master_frames.append(master_df)
 
-        Parameters
-        ----------
-        y_stem
-            Outcome stem.
-
-        Returns
-        -------
-        tuple[str, str]
-            Pre and post column names.
-
-        """
-        return f"{y_stem}_{DATE_PRE}", f"{y_stem}_{DATE_POST}"
-
-    def make_delta(pre, post, transform):
-        """Construct the outcome change series.
-
-        Parameters
-        ----------
-        pre
-            Pre-reform outcome series.
-        post
-            Post-reform outcome series.
-        transform
-            Delta transform name.
-
-        Returns
-        -------
-        pandas.Series
-            Change in the outcome under the configured transform.
-
-        """
-        if transform == "signed":
-            return post - pre
-        if transform == "log1p":
-            return np.log1p(post) - np.log1p(pre)
-        message = f"Unknown transform: {transform!r}"
-        raise ValueError(message)
+        round_lot_df = pd.concat(master_frames, ignore_index=True)
+        wide_round_lot_df = round_lot_df.pivot_table(
+            index="symbol",
+            columns="date_yyyymmdd",
+            values="round_lot",
+            aggfunc="first",
+        )
+        wide_round_lot_df = wide_round_lot_df.reindex(columns=[date_pre, date_post])
+        wide_round_lot_df = wide_round_lot_df.rename(
+            columns={
+                date_pre: PRE_RL_COL,
+                date_post: POST_RL_COL,
+            },
+        )
+        wide_round_lot_df.index.name = "symbol"
+        return wide_round_lot_df.sort_index().reset_index()
 
     def build_base_sample(
-        raw_df,
+        panel_df,
         *,
         pre_round_lot_required,
         allowed_post_round_lots,
@@ -168,50 +243,38 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
 
         Parameters
         ----------
-        raw_df
-            Raw panel dataframe.
+        panel_df
+            Wide symbol-level panel with cross-k outcomes and round-lot columns.
         pre_round_lot_required
             Required pre-reform round lot.
         allowed_post_round_lots
-            Allowed post-reform round-lot values kept in the comparison sample.
+            Post-reform round lots kept in the comparison sample.
 
         Returns
         -------
         pandas.DataFrame
-            Base sample with actual treatment assignment and diagnostic columns.
+            Base comparison sample with treatment assignment columns.
 
         """
-        required_columns = ["symbol", PRICE_COL, PRE_RL_COL, POST_RL_COL]
+        required_columns = ["symbol", PRE_RL_COL, POST_RL_COL]
         missing_columns = [
-            column_name for column_name in required_columns if column_name not in raw_df.columns
+            column_name for column_name in required_columns if column_name not in panel_df.columns
         ]
         if missing_columns:
             message = f"Missing required columns: {missing_columns}"
             raise KeyError(message)
 
-        sample_df = raw_df.copy()
-        sample_df = sample_df.loc[sample_df[PRICE_COL].notna()].copy()
+        sample_df = panel_df.copy()
         sample_df = sample_df.loc[sample_df[PRE_RL_COL] == pre_round_lot_required].copy()
         sample_df = sample_df.loc[sample_df[POST_RL_COL].isin(list(allowed_post_round_lots))].copy()
-
-        sample_df["treated"] = (sample_df[POST_RL_COL] == TREATED_POST_ROUND_LOT).astype(int)
+        sample_df["treated"] = (sample_df[POST_RL_COL] == 40.0).astype(int)
         sample_df["group_label"] = np.where(sample_df["treated"] == 1, "to40", "stay100")
-        sample_df["rule_consistent_250"] = (
-            (
-                (sample_df[PRICE_COL] <= RULE_CUTOFF)
-                & sample_df[POST_RL_COL].eq(CONTROL_POST_ROUND_LOT)
-            )
-            | (
-                (sample_df[PRICE_COL] > RULE_CUTOFF)
-                & sample_df[POST_RL_COL].eq(TREATED_POST_ROUND_LOT)
-            )
-        ).astype(int)
         sample_df["actual_transition"] = (
             sample_df[PRE_RL_COL].astype("Int64").astype(str)
             + "->"
             + sample_df[POST_RL_COL].astype("Int64").astype(str)
         )
-        return sample_df
+        return sample_df.sort_values("symbol", kind="stable").reset_index(drop=True)
 
     def build_outcome_sample(base_sample_df, y_stem):
         """Attach one outcome's pre, post, and delta columns to the base sample.
@@ -229,7 +292,8 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
             Outcome-specific comparison sample.
 
         """
-        pre_y_col, post_y_col = get_outcome_columns(y_stem)
+        pre_y_col = f"{y_stem}_{date_pre}"
+        post_y_col = f"{y_stem}_{date_post}"
         missing_columns = [
             column_name
             for column_name in (pre_y_col, post_y_col)
@@ -239,26 +303,21 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
             message = f"Missing outcome columns: {missing_columns}"
             raise KeyError(message)
 
-        transform = transform_for_outcome(y_stem)
         outcome_df = base_sample_df.copy()
         outcome_df["y_pre"] = pd.to_numeric(outcome_df[pre_y_col], errors="coerce")
         outcome_df["y_post"] = pd.to_numeric(outcome_df[post_y_col], errors="coerce")
-        outcome_df["delta_y"] = make_delta(
-            outcome_df["y_pre"],
-            outcome_df["y_post"],
-            transform=transform,
-        )
+        outcome_df["delta_y"] = np.log1p(outcome_df["y_post"]) - np.log1p(outcome_df["y_pre"])
         outcome_df = outcome_df.loc[
             outcome_df["y_pre"].notna()
             & outcome_df["y_post"].notna()
             & outcome_df["delta_y"].notna()
         ].copy()
         outcome_df["outcome"] = y_stem
-        outcome_df["transform"] = transform
+        outcome_df["transform"] = "log1p"
         return outcome_df
 
     def summarize_base_groups(base_sample_df):
-        """Summarize the common comparison sample by actual post-reform group.
+        """Summarize the common comparison sample by post-reform round-lot group.
 
         Parameters
         ----------
@@ -268,19 +327,15 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         Returns
         -------
         pandas.DataFrame
-            Group counts and price diagnostics.
+            Group counts and transition labels.
 
         """
         return (
             base_sample_df.groupby(["group_label", "treated"], observed=True)
             .agg(
+                actual_transition=("actual_transition", "first"),
                 n_obs=("symbol", "size"),
                 n_symbols=("symbol", "nunique"),
-                mean_price=(PRICE_COL, "mean"),
-                median_price=(PRICE_COL, "median"),
-                min_price=(PRICE_COL, "min"),
-                max_price=(PRICE_COL, "max"),
-                rule_consistent_share=("rule_consistent_250", "mean"),
             )
             .reset_index()
             .sort_values(["treated", "group_label"], kind="stable")
@@ -288,7 +343,7 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         )
 
     def summarize_outcome_groups(outcome_df):
-        """Summarize one outcome's delta by comparison group.
+        """Summarize one outcome's change by comparison group.
 
         Parameters
         ----------
@@ -298,7 +353,7 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         Returns
         -------
         pandas.DataFrame
-            Group-level delta and level summaries.
+            Group-level summaries for the outcome.
 
         """
         return (
@@ -312,9 +367,6 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
                 std_delta=("delta_y", "std"),
                 mean_y_pre=("y_pre", "mean"),
                 mean_y_post=("y_post", "mean"),
-                mean_price=(PRICE_COL, "mean"),
-                median_price=(PRICE_COL, "median"),
-                rule_consistent_share=("rule_consistent_250", "mean"),
             )
             .reset_index()
             .sort_values(["treated", "group_label"], kind="stable")
@@ -322,7 +374,7 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         )
 
     def fit_treated_regression(outcome_df):
-        """Estimate the difference in mean changes between the two groups with OLS.
+        """Estimate the difference in mean outcome changes with OLS.
 
         Parameters
         ----------
@@ -395,8 +447,6 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
             "r2": float(fit.rsquared),
             "mean_delta_control": float(control_row["mean_delta"]),
             "mean_delta_treated": float(treated_row["mean_delta"]),
-            "rule_consistent_share_control": float(control_row["rule_consistent_share"]),
-            "rule_consistent_share_treated": float(treated_row["rule_consistent_share"]),
         }
         json_summary = {
             **flat_summary,
@@ -426,7 +476,7 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         """
         figure, axis = plt.subplots(figsize=(8, 5))
         ordered_groups = ["stay100", "to40"]
-        display_labels = {"stay100": "100のまま", "to40": "40へ移行"}
+        display_labels = {"stay100": "stay100", "to40": "to40"}
         series_list = [
             outcome_df.loc[outcome_df["group_label"] == group_label, "delta_y"].to_numpy(
                 dtype=float
@@ -444,7 +494,7 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
             patch.set_facecolor(box_colors[group_label])
             patch.set_alpha(0.85)
 
-        jitter_rng = np.random.default_rng(20260408)
+        jitter_rng = np.random.default_rng(20260418)
         for index, group_label in enumerate(ordered_groups, start=1):
             group_values = outcome_df.loc[
                 outcome_df["group_label"] == group_label,
@@ -463,9 +513,9 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
             )
 
         axis.axhline(0.0, color="#6b7280", linestyle="--", linewidth=1)
-        axis.set_title(f"round lot 変更後の2群比較: {y_stem}")
-        axis.set_xlabel("事後 round lot の群")
-        axis.set_ylabel("アウトカムの変化")
+        axis.set_title(f"Round-lot comparison: {y_stem}")
+        axis.set_xlabel("Post-reform round-lot group")
+        axis.set_ylabel("log1p(post) - log1p(pre)")
         axis.grid(alpha=0.2)
         figure.tight_layout()
         figure.savefig(outpath, dpi=200)
@@ -517,8 +567,8 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         axis.axvline(0.0, color="#6b7280", linestyle="--", linewidth=1)
         axis.set_yticks(y_positions)
         axis.set_yticklabels(ok_df["outcome"].tolist())
-        axis.set_xlabel("平均変化の差（40へ移行した群 - 100のままの群）")
-        axis.set_title("round lot 変更比較の係数プロット")
+        axis.set_xlabel("Difference in mean log1p change (to40 - stay100)")
+        axis.set_title("Cross-K round-lot comparison")
         axis.grid(alpha=0.2, axis="x")
         figure.tight_layout()
         figure.savefig(outpath, dpi=200)
@@ -573,22 +623,17 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         return path
 
     return (
-        CONTROL_POST_ROUND_LOT,
-        DATE_POST,
-        DATE_PRE,
         POST_RL_COL,
         PRE_RL_COL,
-        PRICE_COL,
-        TREATED_POST_ROUND_LOT,
         build_base_sample,
+        build_cross_k_panel,
         build_outcome_sample,
         fit_treated_regression,
-        infer_available_y_stems,
+        load_round_lot_panel,
         make_boxplot,
         make_coefficient_plot,
         summarize_base_groups,
         summarize_regression,
-        transform_for_outcome,
         write_json,
     )
 
@@ -597,26 +642,50 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
 def _(
     POST_RL_COL,
     PRE_RL_COL,
-    PRICE_COL,
     allowed_post_round_lots,
     build_base_sample,
-    infer_available_y_stems,
+    build_cross_k_panel,
+    cross_k_columns,
+    date_post,
+    date_pre,
+    load_round_lot_panel,
     pd,
     pre_round_lot_required,
+    quote_exchange,
     resolved_input_csv_path,
+    trade_exchange,
 ):
-    raw_df = pd.read_csv(resolved_input_csv_path)
-    available_y_stems = infer_available_y_stems(raw_df.columns)
+    raw_summary_df = pd.read_csv(resolved_input_csv_path)
+    raw_summary_df["date_yyyymmdd"] = raw_summary_df["date_yyyymmdd"].astype(str)
+
+    pair_ok_df = raw_summary_df.loc[
+        (raw_summary_df["status"] == "ok")
+        & (raw_summary_df["trade_exchange"] == trade_exchange)
+        & (raw_summary_df["quote_exchange"] == quote_exchange)
+        & raw_summary_df["date_yyyymmdd"].isin([date_pre, date_post]),
+    ].copy()
+
+    wide_cross_k_df = build_cross_k_panel(
+        raw_summary_df,
+        trade_exchange=trade_exchange,
+        quote_exchange=quote_exchange,
+        date_pre=date_pre,
+        date_post=date_post,
+        cross_k_columns=cross_k_columns,
+    )
+    round_lot_panel_df = load_round_lot_panel(date_pre=date_pre, date_post=date_post)
+    panel_df = wide_cross_k_df.merge(round_lot_panel_df, on="symbol", how="left")
+
+    available_y_stems = list(cross_k_columns)
     base_sample_df = build_base_sample(
-        raw_df,
+        panel_df,
         pre_round_lot_required=pre_round_lot_required,
         allowed_post_round_lots=allowed_post_round_lots,
     )
-    transition_scope_df = raw_df.loc[
-        raw_df[PRICE_COL].notna()
-        & raw_df[PRE_RL_COL].eq(pre_round_lot_required)
-        & raw_df[POST_RL_COL].notna(),
-        [PRICE_COL, PRE_RL_COL, POST_RL_COL],
+
+    transition_scope_df = panel_df.loc[
+        panel_df[PRE_RL_COL].eq(pre_round_lot_required) & panel_df[POST_RL_COL].notna(),
+        ["symbol", PRE_RL_COL, POST_RL_COL],
     ].copy()
     excluded_post_round_lot_counts = (
         transition_scope_df.loc[
@@ -626,7 +695,15 @@ def _(
         .size()
         .to_dict()
     )
-    return available_y_stems, base_sample_df, excluded_post_round_lot_counts, raw_df
+    return (
+        available_y_stems,
+        base_sample_df,
+        excluded_post_round_lot_counts,
+        pair_ok_df,
+        panel_df,
+        raw_summary_df,
+        round_lot_panel_df,
+    )
 
 
 @app.cell
@@ -636,36 +713,38 @@ def _(base_sample_df, summarize_base_groups):
 
 
 @app.cell
-def _(  # noqa: PLR0915
-    CONTROL_POST_ROUND_LOT,
-    DATE_POST,
-    DATE_PRE,
+def _(
     POST_RL_COL,
     PRE_RL_COL,
-    PRICE_COL,
     Path,
-    TREATED_POST_ROUND_LOT,
     UTC,
     allowed_post_round_lots,
     available_y_stems,
     base_sample_df,
     build_outcome_sample,
+    date_post,
+    date_pre,
     datetime,
+    excluded_post_round_lot_counts,
     export_analysis_sample,
     export_group_summary,
     fit_treated_regression,
+    input_csv_stem,
     make_boxplot,
     make_coefficient_plot,
-    panel_csv_stem,
+    pair_label,
+    pair_ok_df,
+    panel_df,
     pd,
     pre_round_lot_required,
-    raw_df,
+    quote_exchange,
+    raw_summary_df,
     resolved_input_csv_path,
     resolved_output_dir,
+    round_lot_panel_df,
     summarize_regression,
-    transform_for_outcome,
+    trade_exchange,
     write_json,
-    excluded_post_round_lot_counts,
 ):
     summary_rows = []
     artifact_rows = []
@@ -748,7 +827,7 @@ def _(  # noqa: PLR0915
             error_summary = {
                 "status": "error",
                 "outcome": y_stem,
-                "transform": transform_for_outcome(y_stem),
+                "transform": "log1p",
                 "coef_treated": None,
                 "se_treated": None,
                 "t_treated": None,
@@ -761,8 +840,6 @@ def _(  # noqa: PLR0915
                 "r2": None,
                 "mean_delta_control": None,
                 "mean_delta_treated": None,
-                "rule_consistent_share_control": None,
-                "rule_consistent_share_treated": None,
                 "analysis_sample_csv": None,
                 "group_summary_csv": None,
                 "boxplot_png": None,
@@ -823,24 +900,27 @@ def _(  # noqa: PLR0915
     run_manifest = {
         "created_at_utc": datetime.now(UTC),
         "input_csv_path": str(resolved_input_csv_path),
-        "panel_csv_stem": panel_csv_stem,
+        "input_csv_stem": input_csv_stem,
         "output_dir": str(resolved_output_dir),
-        "date_pre": DATE_PRE,
-        "date_post": DATE_POST,
-        "price_col": PRICE_COL,
+        "pair_label": pair_label,
+        "trade_exchange": trade_exchange,
+        "quote_exchange": quote_exchange,
+        "date_pre": date_pre,
+        "date_post": date_post,
         "pre_round_lot_col": PRE_RL_COL,
         "post_round_lot_col": POST_RL_COL,
         "pre_round_lot_required": pre_round_lot_required,
         "allowed_post_round_lots": list(allowed_post_round_lots),
-        "control_post_round_lot": CONTROL_POST_ROUND_LOT,
-        "treated_post_round_lot": TREATED_POST_ROUND_LOT,
         "available_y_stems": list(available_y_stems),
-        "n_raw_rows": len(raw_df),
+        "n_raw_rows": len(raw_summary_df),
+        "n_pair_ok_rows": len(pair_ok_df),
+        "n_panel_symbols": int(panel_df["symbol"].nunique()),
+        "n_round_lot_symbols": int(round_lot_panel_df["symbol"].nunique()),
         "n_base_sample": len(base_sample_df),
         "n_successful_outcomes": int((analysis_results_df["status"] == "ok").sum()),
         "excluded_post_round_lot_counts": excluded_post_round_lot_counts,
         "artifact_files": artifact_manifest_df.to_dict(orient="records"),
-        "analysis_note": "Observed actual group comparison only; not a causal RD design.",
+        "analysis_note": ("Observed actual group comparison only; not a causal RD design."),
     }
     run_manifest_path = resolved_output_dir / "run_manifest.json"
     write_json(run_manifest, run_manifest_path)
@@ -866,7 +946,10 @@ def _(  # noqa: PLR0915
             {
                 "input_csv_path": str(resolved_input_csv_path),
                 "output_dir": str(resolved_output_dir),
-                "n_raw_rows": len(raw_df),
+                "pair_label": pair_label,
+                "n_raw_rows": len(raw_summary_df),
+                "n_pair_ok_rows": len(pair_ok_df),
+                "n_panel_symbols": int(panel_df["symbol"].nunique()),
                 "n_base_sample": len(base_sample_df),
                 "n_outcomes": len(available_y_stems),
             }
@@ -880,14 +963,13 @@ def _(  # noqa: PLR0915
         input_overview_df,
         outcome_list_df,
         preview_plot_path,
-        run_manifest,
     )
 
 
 @app.cell
 def _():
     analysis_note = (
-        "この notebook は，各アウトカムの変化を，round lot が 100 のままの銘柄群と "
+        "この notebook は，各 cross K 指標の変化を，round lot が 100 のままの銘柄群と "
         "100 から 40 へ移行した銘柄群のあいだで比較する．"
         "これは実際の群どうしの比較であり，因果的な RD 設計ではない．"
     )
@@ -949,12 +1031,6 @@ def _(mpimg, plt, preview_plot_path):
         _axis.set_title(str(preview_plot_path))
         preview_plot.tight_layout()
     preview_plot  # noqa: B018
-    return
-
-
-@app.cell
-def _(run_manifest):
-    run_manifest  # noqa: B018
     return
 
 

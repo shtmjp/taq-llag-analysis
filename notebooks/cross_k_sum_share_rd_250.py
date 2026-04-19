@@ -1,77 +1,373 @@
 import marimo
 
-__generated_with = "0.22.5"
+__generated_with = "0.23.1"
 app = marimo.App(width="medium")
 
 
 @app.cell
 def _():
     import json
+    import sys
     from datetime import UTC, datetime
     from pathlib import Path
 
+    import marimo as mo
     import matplotlib.image as mpimg
     import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
     import statsmodels.api as sm
 
-    return UTC, Path, datetime, json, mpimg, np, pd, plt, sm
+    src_dir = Path(__file__).resolve().parents[1] / "src"
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+
+    from taq_llag_analysis.preprocess.daily_taq_paths import master_input_path
+
+    plt.rcParams["axes.unicode_minus"] = False
+    return (
+        Path,
+        UTC,
+        datetime,
+        json,
+        master_input_path,
+        mo,
+        mpimg,
+        np,
+        pd,
+        plt,
+        sm,
+    )
 
 
 @app.cell
-def _(Path):
-    input_csv_path = None
-    output_base_dir = Path("data/derived/m_trade_quote_rd_250")
+def _(Path, pd):
+    analysis_note = "Observed price-threshold comparison only; not a causal RD design."
+    input_csv_path = Path("../data/derived/trade_quote_modes/my-run/cross_k_summary.csv")
+    cta_symbol_dir = Path("../data/cta_symbol_files_202509")
+    output_base_dir = Path("output/cross_k_sum_share_rd_250")
+    trade_exchange = "N"
+    quote_exchange = "P"
+    date_pre = "20251031"
+    date_post = "20251103"
+    price_column = "ConsolidatedClosingPrice"
     cutoff = 250.0
     upper_bound = 1000.0
+    pre_round_lot_required = 100.0
     enforce_rule_consistency = True
     bins_per_side = 10
     export_analysis_sample = True
     export_balance_tests = True
     balance_covariates = None
+    component_groups = {
+        "negative": (
+            {
+                "distance_band": "far_from_zero",
+                "window_label": "[-1e-3, -1e-4)",
+                "raw_column": "cross_k_neg_1e3_1e4",
+                "share_outcome": "negative_far_from_zero_share",
+            },
+            {
+                "distance_band": "mid_range",
+                "window_label": "[-1e-4, -1e-5)",
+                "raw_column": "cross_k_neg_1e4_1e5",
+                "share_outcome": "negative_mid_range_share",
+            },
+            {
+                "distance_band": "near_zero",
+                "window_label": "[-1e-5, 0)",
+                "raw_column": "cross_k_neg_1e5_0",
+                "share_outcome": "negative_near_zero_share",
+            },
+        ),
+        "positive": (
+            {
+                "distance_band": "near_zero",
+                "window_label": "[0, 1e-5)",
+                "raw_column": "cross_k_pos_0_1e5",
+                "share_outcome": "positive_near_zero_share",
+            },
+            {
+                "distance_band": "mid_range",
+                "window_label": "[1e-5, 1e-4)",
+                "raw_column": "cross_k_pos_1e5_1e4",
+                "share_outcome": "positive_mid_range_share",
+            },
+            {
+                "distance_band": "far_from_zero",
+                "window_label": "[1e-4, 1e-3)",
+                "raw_column": "cross_k_pos_1e4_1e3",
+                "share_outcome": "positive_far_from_zero_share",
+            },
+        ),
+    }
+    sum_outcomes = {
+        "negative": "negative_total",
+        "positive": "positive_total",
+    }
+    raw_cross_k_columns = [
+        component["raw_column"]
+        for side_components in component_groups.values()
+        for component in side_components
+    ]
+    direct_outcome_specs = [
+        {
+            "raw_column": "closest_mode_to_zero_sec",
+            "outcome": "mode_position_sec",
+            "display_name": "Mode position (sec)",
+            "side": "overall",
+            "family": "mode",
+            "transform": "signed",
+            "window_label": "Signed nearest-to-zero mode location",
+        }
+    ]
+    raw_panel_columns = [
+        *raw_cross_k_columns,
+        *[spec["raw_column"] for spec in direct_outcome_specs],
+    ]
+    outcome_specs = [
+        {
+            "outcome": "negative_total",
+            "display_name": "Negative total",
+            "side": "negative",
+            "family": "sum",
+            "transform": "log1p",
+        },
+        {
+            "outcome": "positive_total",
+            "display_name": "Positive total",
+            "side": "positive",
+            "family": "sum",
+            "transform": "log1p",
+        },
+        {
+            "outcome": "negative_near_zero_share",
+            "display_name": "Negative near-zero share",
+            "side": "negative",
+            "family": "share",
+            "transform": "signed",
+        },
+        {
+            "outcome": "negative_mid_range_share",
+            "display_name": "Negative mid-range share",
+            "side": "negative",
+            "family": "share",
+            "transform": "signed",
+        },
+        {
+            "outcome": "negative_far_from_zero_share",
+            "display_name": "Negative far-from-zero share",
+            "side": "negative",
+            "family": "share",
+            "transform": "signed",
+        },
+        {
+            "outcome": "positive_near_zero_share",
+            "display_name": "Positive near-zero share",
+            "side": "positive",
+            "family": "share",
+            "transform": "signed",
+        },
+        {
+            "outcome": "positive_mid_range_share",
+            "display_name": "Positive mid-range share",
+            "side": "positive",
+            "family": "share",
+            "transform": "signed",
+        },
+        {
+            "outcome": "positive_far_from_zero_share",
+            "display_name": "Positive far-from-zero share",
+            "side": "positive",
+            "family": "share",
+            "transform": "signed",
+        },
+        *[
+            {
+                "outcome": spec["outcome"],
+                "display_name": spec["display_name"],
+                "side": spec["side"],
+                "family": spec["family"],
+                "transform": spec["transform"],
+            }
+            for spec in direct_outcome_specs
+        ],
+    ]
+    outcome_specs_df = pd.DataFrame(outcome_specs)
+    component_definition_rows = []
+    for side, components in component_groups.items():
+        for component in components:
+            component_definition_rows.append(
+                {
+                    "construction": "aggregated",
+                    "side": side,
+                    "distance_band": component["distance_band"],
+                    "window_label": component["window_label"],
+                    "raw_column": component["raw_column"],
+                    "sum_outcome": sum_outcomes[side],
+                    "share_outcome": component["share_outcome"],
+                    "direct_outcome": None,
+                }
+            )
+    for spec in direct_outcome_specs:
+        component_definition_rows.append(
+            {
+                "construction": "direct",
+                "side": spec["side"],
+                "distance_band": "closest_to_zero",
+                "window_label": spec["window_label"],
+                "raw_column": spec["raw_column"],
+                "sum_outcome": None,
+                "share_outcome": None,
+                "direct_outcome": spec["outcome"],
+            }
+        )
+    component_definition_df = pd.DataFrame(component_definition_rows)
     return (
+        analysis_note,
         balance_covariates,
         bins_per_side,
+        component_definition_df,
+        component_groups,
+        cta_symbol_dir,
         cutoff,
+        date_post,
+        date_pre,
+        direct_outcome_specs,
         enforce_rule_consistency,
         export_analysis_sample,
         export_balance_tests,
         input_csv_path,
+        outcome_specs,
+        outcome_specs_df,
         output_base_dir,
+        pre_round_lot_required,
+        price_column,
+        quote_exchange,
+        raw_panel_columns,
+        sum_outcomes,
+        trade_exchange,
         upper_bound,
     )
 
 
 @app.cell
-def _(Path, input_csv_path, output_base_dir):
-    panel_base_dir = Path("data/derived/trade_quote_mode_symbol_panel")
-    if input_csv_path is None:
-        candidate_paths = sorted(panel_base_dir.glob("*_with_round_lot_sep2025_mean_close.csv"))
-        if not candidate_paths:
-            message = f"No panel CSV files found under {panel_base_dir}."
-            raise FileNotFoundError(message)
-        resolved_input_csv_path = candidate_paths[-1]
-    else:
-        resolved_input_csv_path = Path(input_csv_path)
+def _(analysis_note, mo):
+    overview_section = mo.md(
+        f"""
+        ## Overview
 
-    if not resolved_input_csv_path.exists():
-        message = f"Panel CSV not found: {resolved_input_csv_path}"
-        raise FileNotFoundError(message)
+        This notebook estimates RD effects at the $250 round-lot threshold for
+        the `N/P` exchange pair using September CTA close prices as the running
+        variable. Outcomes are the aggregated cross-K totals and shares plus the
+        direct mode-position outcome defined in the companion sum/share notebook.
 
-    panel_csv_stem = resolved_input_csv_path.stem
-    resolved_output_dir = output_base_dir / panel_csv_stem
-    resolved_output_dir.mkdir(parents=True, exist_ok=True)
-    return panel_csv_stem, resolved_input_csv_path, resolved_output_dir
+        `{analysis_note}`
+        """
+    )
+    overview_section
+    return
 
 
 @app.cell
-def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
-    DATE_PRE = "20251031"
-    DATE_POST = "20251103"
+def _(
+    bins_per_side,
+    cta_symbol_dir,
+    cutoff,
+    date_post,
+    date_pre,
+    enforce_rule_consistency,
+    input_csv_path,
+    mo,
+    output_base_dir,
+    pre_round_lot_required,
+    price_column,
+    quote_exchange,
+    trade_exchange,
+    upper_bound,
+):
+    inputs_section = mo.md(
+        f"""
+        ## Inputs
+
+        This section records the raw cross-K source, CTA price source, exchange
+        pair, and RD tuning parameters.
+
+        - `input_csv_path`: `{input_csv_path}`
+        - `cta_symbol_dir`: `{cta_symbol_dir}`
+        - `output_base_dir`: `{output_base_dir}`
+        - `trade_exchange`: `{trade_exchange}`
+        - `quote_exchange`: `{quote_exchange}`
+        - `date_pre`: `{date_pre}`
+        - `date_post`: `{date_post}`
+        - `price_column`: `{price_column}`
+        - `cutoff`: `{cutoff}`
+        - `upper_bound`: `{upper_bound}`
+        - `pre_round_lot_required`: `{pre_round_lot_required}`
+        - `enforce_rule_consistency`: `{enforce_rule_consistency}`
+        - `bins_per_side`: `{bins_per_side}`
+        """
+    )
+    inputs_section
+    return
+
+
+@app.cell
+def _(
+    Path,
+    cta_symbol_dir,
+    input_csv_path,
+    output_base_dir,
+    quote_exchange,
+    trade_exchange,
+):
+    resolved_input_csv_path = Path(input_csv_path)
+    if not resolved_input_csv_path.exists():
+        message = f"cross_k summary not found: {resolved_input_csv_path}"
+        raise FileNotFoundError(message)
+
+    resolved_cta_symbol_dir = Path(cta_symbol_dir)
+    if not resolved_cta_symbol_dir.exists():
+        message = f"CTA symbol dir not found: {resolved_cta_symbol_dir}"
+        raise FileNotFoundError(message)
+
+    cta_price_files = sorted(resolved_cta_symbol_dir.glob("CTA.Symbol.File.202509*.csv"))
+    if not cta_price_files:
+        message = f"No CTA symbol files found under {resolved_cta_symbol_dir}"
+        raise FileNotFoundError(message)
+
+    input_csv_stem = resolved_input_csv_path.stem
+    pair_label = f"{trade_exchange}{quote_exchange}"
+    resolved_output_dir = output_base_dir / f"{input_csv_stem}_{pair_label}"
+    resolved_output_dir.mkdir(parents=True, exist_ok=True)
+    return (
+        cta_price_files,
+        input_csv_stem,
+        pair_label,
+        resolved_cta_symbol_dir,
+        resolved_input_csv_path,
+        resolved_output_dir,
+    )
+
+
+@app.cell
+def _(
+    Path,
+    date_post,
+    date_pre,
+    datetime,
+    json,
+    master_input_path,
+    np,
+    pd,
+    plt,
+    sm,
+):
+    DATE_PRE = date_pre
+    DATE_POST = date_post
     PRICE_COL = "mean_close_202509"
-    PRE_RL_COL = "round_lot_20251031"
-    POST_RL_COL = "round_lot_20251103"
+    PRE_RL_COL = f"round_lot_{DATE_PRE}"
+    POST_RL_COL = f"round_lot_{DATE_POST}"
     PRE_REFORM_ROUND_LOT = 100.0
     POST_REFORM_SMALL_LOT = 40.0
     DENSITY_STATUS = "omitted"
@@ -81,64 +377,217 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
     MIN_BALANCE_OBS = 10
     MIN_ANALYSIS_OBS = 20
 
-    def infer_available_y_stems(columns):
-        """Infer outcome stems that appear for both analysis dates.
+    def build_cross_k_panel(
+        summary_df,
+        *,
+        trade_exchange,
+        quote_exchange,
+        date_pre,
+        date_post,
+        raw_columns,
+    ):
+        """Build a symbol-level wide panel for selected raw outcome columns.
 
         Parameters
         ----------
-        columns
-            Column labels from the panel CSV.
+        summary_df
+            Long-form `cross_k_summary.csv` dataframe.
+        trade_exchange
+            Trade exchange code to keep.
+        quote_exchange
+            Quote exchange code to keep.
+        date_pre
+            Pre-reform date in `YYYYMMDD` format.
+        date_post
+            Post-reform date in `YYYYMMDD` format.
+        raw_columns
+            Raw outcome column names to pivot into wide form.
 
         Returns
         -------
-        list[str]
-            Sorted outcome stems excluding `round_lot`.
+        pandas.DataFrame
+            Symbol-level panel with one pre/post column pair per raw component.
 
         """
-        pre_suffix = f"_{DATE_PRE}"
-        post_suffix = f"_{DATE_POST}"
-        stems = []
-        for column_name in columns:
-            if not str(column_name).endswith(pre_suffix):
-                continue
-            stem = str(column_name)[: -len(pre_suffix)]
-            if stem == "round_lot":
-                continue
-            if f"{stem}{post_suffix}" in columns:
-                stems.append(stem)
-        return sorted(set(stems))
+        selected_df = summary_df.copy()
+        selected_df["date_yyyymmdd"] = selected_df["date_yyyymmdd"].astype(str)
+        selected_df = selected_df.loc[
+            (selected_df["status"] == "ok")
+            & (selected_df["trade_exchange"] == trade_exchange)
+            & (selected_df["quote_exchange"] == quote_exchange)
+            & selected_df["date_yyyymmdd"].isin([date_pre, date_post]),
+            ["symbol", "date_yyyymmdd", *raw_columns],
+        ].copy()
 
-    def transform_for_outcome(y_stem):
-        """Map an outcome stem to its delta transform.
+        wide_parts = []
+        for column_name in raw_columns:
+            wide_part = selected_df.pivot_table(
+                index="symbol",
+                columns="date_yyyymmdd",
+                values=column_name,
+                aggfunc="first",
+            )
+            wide_part = wide_part.reindex(columns=[date_pre, date_post])
+            wide_part = wide_part.rename(
+                columns={
+                    date_pre: f"{column_name}_{date_pre}",
+                    date_post: f"{column_name}_{date_post}",
+                },
+            )
+            wide_parts.append(wide_part)
+
+        wide_df = pd.concat(wide_parts, axis=1)
+        wide_df.index.name = "symbol"
+        return wide_df.sort_index().reset_index()
+
+    def derive_aggregated_outcomes(
+        raw_panel_df,
+        *,
+        component_groups,
+        date_pre,
+        date_post,
+        direct_outcome_specs,
+        sum_outcomes,
+    ):
+        """Construct derived outcomes from the raw cross-k and mode columns.
 
         Parameters
         ----------
-        y_stem
-            Outcome stem inferred from the panel CSV.
+        raw_panel_df
+            Wide symbol-level dataframe with raw component columns.
+        component_groups
+            Mapping from side name to component metadata.
+        date_pre
+            Pre-reform date in `YYYYMMDD` format.
+        date_post
+            Post-reform date in `YYYYMMDD` format.
+        direct_outcome_specs
+            Metadata for direct outcomes copied from raw columns.
+        sum_outcomes
+            Mapping from side name to total-outcome name.
 
         Returns
         -------
-        str
-            `signed` for `mode`, otherwise `log1p`.
+        pandas.DataFrame
+            Symbol-level dataframe with derived pre/post outcomes.
 
         """
-        return "signed" if y_stem == "mode" else "log1p"
+        aggregated_df = raw_panel_df.loc[:, ["symbol"]].copy()
+        for side, components in component_groups.items():
+            for date_yyyymmdd in (date_pre, date_post):
+                component_columns = [
+                    f"{component['raw_column']}_{date_yyyymmdd}" for component in components
+                ]
+                total_column = f"{sum_outcomes[side]}_{date_yyyymmdd}"
+                aggregated_df[total_column] = raw_panel_df[component_columns].sum(
+                    axis=1,
+                    min_count=len(component_columns),
+                )
+                total_series = aggregated_df[total_column]
+                nonzero_total = total_series.where(total_series.ne(0.0))
+                for component in components:
+                    numerator_column = f"{component['raw_column']}_{date_yyyymmdd}"
+                    share_column = f"{component['share_outcome']}_{date_yyyymmdd}"
+                    aggregated_df[share_column] = raw_panel_df[numerator_column].div(nonzero_total)
+        for spec in direct_outcome_specs:
+            for date_yyyymmdd in (date_pre, date_post):
+                aggregated_df[f"{spec['outcome']}_{date_yyyymmdd}"] = raw_panel_df[
+                    f"{spec['raw_column']}_{date_yyyymmdd}"
+                ]
+        return aggregated_df
 
-    def get_outcome_columns(y_stem):
-        """Return the pre/post column names for one outcome stem.
+    def load_cta_mean_close_panel(*, cta_price_files, price_column):
+        """Build a symbol-level September mean close table from CTA files.
 
         Parameters
         ----------
-        y_stem
-            Outcome stem.
+        cta_price_files
+            Daily CTA symbol-file paths for September 2025.
+        price_column
+            CTA price column name to average.
 
         Returns
         -------
-        tuple[str, str]
-            Pre and post column names.
+        pandas.DataFrame
+            One row per symbol with the September mean close.
 
         """
-        return f"{y_stem}_{DATE_PRE}", f"{y_stem}_{DATE_POST}"
+        price_frames = []
+        for path in cta_price_files:
+            price_df = pd.read_csv(
+                path,
+                usecols=["Symbol", price_column],
+            ).rename(
+                columns={
+                    "Symbol": "symbol",
+                    price_column: "close_price",
+                }
+            )
+            price_frames.append(price_df)
+
+        combined_df = pd.concat(price_frames, ignore_index=True)
+        return (
+            combined_df.groupby("symbol", as_index=False)
+            .agg(
+                mean_close_202509=("close_price", "mean"),
+                n_close_obs_202509=("close_price", "count"),
+            )
+            .sort_values("symbol", kind="stable")
+            .reset_index(drop=True)
+        )
+
+    def load_round_lot_panel(*, date_pre, date_post):
+        """Load round-lot values from Daily TAQ master files.
+
+        Parameters
+        ----------
+        date_pre
+            Pre-reform date in `YYYYMMDD` format.
+        date_post
+            Post-reform date in `YYYYMMDD` format.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Symbol-level wide dataframe with pre/post round-lot columns.
+
+        """
+        master_frames = []
+        for date_yyyymmdd in (date_pre, date_post):
+            master_path = master_input_path(date_yyyymmdd)
+            master_df = pd.read_csv(
+                master_path,
+                sep="|",
+                encoding="latin1",
+                compression="gzip",
+                usecols=["Symbol", "Round_Lot"],
+            )
+            master_df = master_df.loc[master_df["Symbol"] != "END"].copy()
+            master_df["date_yyyymmdd"] = date_yyyymmdd
+            master_df = master_df.rename(
+                columns={
+                    "Symbol": "symbol",
+                    "Round_Lot": "round_lot",
+                }
+            )
+            master_frames.append(master_df)
+
+        round_lot_df = pd.concat(master_frames, ignore_index=True)
+        wide_round_lot_df = round_lot_df.pivot_table(
+            index="symbol",
+            columns="date_yyyymmdd",
+            values="round_lot",
+            aggfunc="first",
+        )
+        wide_round_lot_df = wide_round_lot_df.reindex(columns=[date_pre, date_post])
+        wide_round_lot_df = wide_round_lot_df.rename(
+            columns={
+                date_pre: PRE_RL_COL,
+                date_post: POST_RL_COL,
+            }
+        )
+        wide_round_lot_df.index.name = "symbol"
+        return wide_round_lot_df.sort_index().reset_index()
 
     def make_delta(pre, post, transform):
         """Construct the outcome change used in RD estimation.
@@ -193,6 +642,8 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         cutoff,
         upper_bound,
         enforce_rule_consistency,
+        outcome_specs_by_name,
+        pre_round_lot_required,
     ):
         """Build the sharp RD sample for one outcome.
 
@@ -208,6 +659,10 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
             Upper support cutoff for September mean close.
         enforce_rule_consistency
             Whether to keep only rows consistent with the post-reform rule.
+        outcome_specs_by_name
+            Outcome metadata keyed by outcome name.
+        pre_round_lot_required
+            Required pre-reform round lot.
 
         Returns
         -------
@@ -215,7 +670,8 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
             Analysis sample with derived RD columns.
 
         """
-        pre_y_col, post_y_col = get_outcome_columns(y_stem)
+        pre_y_col = f"{y_stem}_{date_pre}"
+        post_y_col = f"{y_stem}_{date_post}"
         required_columns = [
             "symbol",
             PRICE_COL,
@@ -231,15 +687,15 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
             message = f"Missing required columns: {missing_columns}"
             raise KeyError(message)
 
-        transform = transform_for_outcome(y_stem)
+        transform = str(outcome_specs_by_name[y_stem]["transform"])
         analysis_df = df.copy()
         analysis_df = analysis_df.loc[analysis_df[PRICE_COL].notna()].copy()
         analysis_df = analysis_df.loc[analysis_df[PRICE_COL] < upper_bound].copy()
-        analysis_df = analysis_df.loc[analysis_df[PRE_RL_COL] == PRE_REFORM_ROUND_LOT].copy()
+        analysis_df = analysis_df.loc[analysis_df[PRE_RL_COL] == pre_round_lot_required].copy()
         analysis_df = analysis_df.loc[analysis_df[POST_RL_COL].notna()].copy()
 
-        analysis_df["y_pre"] = analysis_df[pre_y_col]
-        analysis_df["y_post"] = analysis_df[post_y_col]
+        analysis_df["y_pre"] = pd.to_numeric(analysis_df[pre_y_col], errors="coerce")
+        analysis_df["y_post"] = pd.to_numeric(analysis_df[post_y_col], errors="coerce")
         analysis_df["delta_y"] = make_delta(
             analysis_df["y_pre"],
             analysis_df["y_post"],
@@ -247,6 +703,10 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         )
         analysis_df = analysis_df.loc[analysis_df["delta_y"].notna()].copy()
 
+        analysis_df["display_name"] = str(outcome_specs_by_name[y_stem]["display_name"])
+        analysis_df["side"] = str(outcome_specs_by_name[y_stem]["side"])
+        analysis_df["family"] = str(outcome_specs_by_name[y_stem]["family"])
+        analysis_df["transform"] = transform
         analysis_df["running"] = analysis_df[PRICE_COL] - cutoff
         analysis_df["D_rule"] = (analysis_df["running"] > 0).astype(int)
         analysis_df["expected_post_round_lot"] = expected_round_lot_250(
@@ -257,7 +717,6 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
             analysis_df[POST_RL_COL] == analysis_df["expected_post_round_lot"]
         )
         analysis_df["D_actual"] = (analysis_df[POST_RL_COL] == POST_REFORM_SMALL_LOT).astype(int)
-
         if enforce_rule_consistency:
             analysis_df = analysis_df.loc[analysis_df["rule_consistent"]].copy()
 
@@ -285,9 +744,6 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         weights = np.zeros_like(centered, dtype=float)
         left_mask = centered < 0
         right_mask = ~left_mask
-        if h_left <= 0 or h_right <= 0:
-            message = "Bandwidths must be strictly positive."
-            raise ValueError(message)
         weights[left_mask] = np.maximum(1.0 - np.abs(centered[left_mask]) / h_left, 0.0)
         weights[right_mask] = np.maximum(1.0 - np.abs(centered[right_mask]) / h_right, 0.0)
         return weights
@@ -478,20 +934,20 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         y_left = beta[0] + beta[2] * (x_left - cutoff)
         y_right = beta[0] + beta[1] + (beta[2] + beta[3]) * (x_right - cutoff)
 
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.scatter(left_bins["x"], left_bins["y"], label="Left bins", color="#1d4ed8")
-        ax.scatter(right_bins["x"], right_bins["y"], label="Right bins", color="#b91c1c")
-        ax.plot(x_left, y_left, linewidth=2, color="#1d4ed8")
-        ax.plot(x_right, y_right, linewidth=2, color="#b91c1c")
-        ax.axvline(cutoff, linestyle="--", linewidth=1, color="#111827")
-        ax.set_title(title)
-        ax.set_xlabel("September mean close")
-        ax.set_ylabel(y_label)
-        ax.grid(alpha=0.2)
-        ax.legend(frameon=False)
-        fig.tight_layout()
-        fig.savefig(outpath, dpi=200)
-        plt.close(fig)
+        figure, axis = plt.subplots(figsize=(8, 5))
+        axis.scatter(left_bins["x"], left_bins["y"], label="Left bins", color="#1d4ed8")
+        axis.scatter(right_bins["x"], right_bins["y"], label="Right bins", color="#b91c1c")
+        axis.plot(x_left, y_left, linewidth=2, color="#1d4ed8")
+        axis.plot(x_right, y_right, linewidth=2, color="#b91c1c")
+        axis.axvline(cutoff, linestyle="--", linewidth=1, color="#111827")
+        axis.set_title(title)
+        axis.set_xlabel("September mean close")
+        axis.set_ylabel(y_label)
+        axis.grid(alpha=0.2)
+        axis.legend(frameon=False)
+        figure.tight_layout()
+        figure.savefig(outpath, dpi=200)
+        plt.close(figure)
         return outpath
 
     def try_rdrobust(*, y, x, cutoff, covs=None):
@@ -627,7 +1083,7 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
             Sorted pre-reform covariate column names.
 
         """
-        pre_suffix = f"_{DATE_PRE}"
+        pre_suffix = f"_{date_pre}"
         current_pre = f"{y_stem}{pre_suffix}"
         return sorted(
             column_name
@@ -726,40 +1182,211 @@ def _(Path, datetime, json, np, pd, plt, sm):  # noqa: C901, PLR0915
         return path
 
     return (
+        DATE_POST,
         DATE_PRE,
         DENSITY_REASON,
         DENSITY_STATUS,
         MIN_ANALYSIS_OBS,
         PRICE_COL,
+        build_cross_k_panel,
         build_rd_sample,
         default_balance_covariates,
-        infer_available_y_stems,
+        derive_aggregated_outcomes,
+        load_cta_mean_close_panel,
+        load_round_lot_panel,
         make_manual_rd_plot,
         run_balance_tests,
         summarize_rdrobust,
-        transform_for_outcome,
         try_rdrobust,
         write_json,
     )
 
 
 @app.cell
-def _(  # noqa: C901, PLR0915
+def _(mo):
+    cta_price_section = mo.md(
+        """
+        ## CTA Price Construction
+
+        This section builds the running variable by averaging the daily
+        `ConsolidatedClosingPrice` entries from the September 2025 CTA symbol
+        files, then joining that symbol-level mean to the N/P cross-K panel.
+        """
+    )
+    cta_price_section
+    return
+
+
+@app.cell
+def _(
+    PRICE_COL,
+    build_cross_k_panel,
+    component_groups,
+    cta_price_files,
+    date_post,
+    date_pre,
+    derive_aggregated_outcomes,
+    direct_outcome_specs,
+    input_csv_stem,
+    load_cta_mean_close_panel,
+    load_round_lot_panel,
+    outcome_specs,
+    outcome_specs_df,
+    pd,
+    price_column,
+    quote_exchange,
+    raw_panel_columns,
+    resolved_cta_symbol_dir,
+    resolved_input_csv_path,
+    resolved_output_dir,
+    sum_outcomes,
+    trade_exchange,
+):
+    raw_summary_df = pd.read_csv(resolved_input_csv_path)
+    raw_summary_df["date_yyyymmdd"] = raw_summary_df["date_yyyymmdd"].astype(str)
+
+    pair_ok_df = raw_summary_df.loc[
+        (raw_summary_df["status"] == "ok")
+        & (raw_summary_df["trade_exchange"] == trade_exchange)
+        & (raw_summary_df["quote_exchange"] == quote_exchange)
+        & raw_summary_df["date_yyyymmdd"].isin([date_pre, date_post]),
+    ].copy()
+
+    raw_panel_df = build_cross_k_panel(
+        raw_summary_df,
+        trade_exchange=trade_exchange,
+        quote_exchange=quote_exchange,
+        date_pre=date_pre,
+        date_post=date_post,
+        raw_columns=raw_panel_columns,
+    )
+    aggregated_panel_df = derive_aggregated_outcomes(
+        raw_panel_df,
+        component_groups=component_groups,
+        date_pre=date_pre,
+        date_post=date_post,
+        direct_outcome_specs=direct_outcome_specs,
+        sum_outcomes=sum_outcomes,
+    )
+    cta_mean_close_df = load_cta_mean_close_panel(
+        cta_price_files=cta_price_files,
+        price_column=price_column,
+    )
+    round_lot_panel_df = load_round_lot_panel(date_pre=date_pre, date_post=date_post)
+
+    panel_df = (
+        aggregated_panel_df.merge(cta_mean_close_df, on="symbol", how="left")
+        .merge(round_lot_panel_df, on="symbol", how="left")
+        .sort_values("symbol", kind="stable")
+        .reset_index(drop=True)
+    )
+
+    pair_symbol_date_counts = pair_ok_df.groupby("symbol")["date_yyyymmdd"].nunique()
+    pair_symbols_both_dates = sorted(
+        pair_symbol_date_counts.loc[pair_symbol_date_counts == 2].index.tolist()
+    )
+    both_dates_price_mask = panel_df["symbol"].isin(pair_symbols_both_dates)
+    n_pair_symbols_with_price = int(panel_df.loc[both_dates_price_mask, PRICE_COL].notna().sum())
+    n_pair_symbols_missing_price = int(panel_df.loc[both_dates_price_mask, PRICE_COL].isna().sum())
+
+    input_overview_df = pd.DataFrame(
+        [
+            {
+                "input_csv_path": str(resolved_input_csv_path),
+                "cta_symbol_dir": str(resolved_cta_symbol_dir),
+                "output_dir": str(resolved_output_dir),
+                "input_csv_stem": input_csv_stem,
+                "pair_label": f"{trade_exchange}{quote_exchange}",
+                "n_pair_ok_rows": len(pair_ok_df),
+                "n_pair_symbols_any_date": int(pair_ok_df["symbol"].nunique()),
+                "n_pair_symbols_both_dates": len(pair_symbols_both_dates),
+                "n_panel_symbols": int(panel_df["symbol"].nunique()),
+                "n_panel_symbols_with_price": int(panel_df[PRICE_COL].notna().sum()),
+                "n_both_dates_symbols_with_price": n_pair_symbols_with_price,
+                "n_both_dates_symbols_missing_price": n_pair_symbols_missing_price,
+            }
+        ]
+    )
+    cta_price_summary_df = pd.DataFrame(
+        [
+            {
+                "cta_symbol_dir": str(resolved_cta_symbol_dir),
+                "price_column": price_column,
+                "n_cta_files": len(cta_price_files),
+                "n_cta_symbols": int(cta_mean_close_df["symbol"].nunique()),
+                "n_pair_symbols_both_dates": len(pair_symbols_both_dates),
+                "n_both_dates_symbols_with_price": n_pair_symbols_with_price,
+                "n_both_dates_symbols_missing_price": n_pair_symbols_missing_price,
+            }
+        ]
+    )
+
+    outcome_specs_by_name = {
+        str(spec["outcome"]): {
+            "display_name": str(spec["display_name"]),
+            "side": str(spec["side"]),
+            "family": str(spec["family"]),
+            "transform": str(spec["transform"]),
+        }
+        for spec in outcome_specs
+    }
+    available_y_stems = [str(spec["outcome"]) for spec in outcome_specs]
+    outcome_list_df = outcome_specs_df.copy()
+    return (
+        available_y_stems,
+        cta_mean_close_df,
+        cta_price_summary_df,
+        input_overview_df,
+        outcome_list_df,
+        outcome_specs_by_name,
+        pair_ok_df,
+        pair_symbols_both_dates,
+        panel_df,
+        round_lot_panel_df,
+    )
+
+
+@app.cell
+def _(cta_price_summary_df):
+    cta_price_summary_df
+    return
+
+
+@app.cell
+def _(component_definition_df, mo):
+    outcome_construction_section = mo.md(
+        """
+        ## Outcome Construction
+
+        This section maps the six raw cross-K windows into side totals and
+        within-side distance-band shares. It also carries the direct
+        `closest_mode_to_zero_sec -> mode_position_sec` outcome, so the RD
+        targets include 8 derived outcomes plus 1 direct mode-location outcome.
+        """
+    )
+    outcome_construction_section
+    component_definition_df
+    return
+
+
+@app.cell
+def _(
+    DATE_POST,
     DATE_PRE,
-    MIN_ANALYSIS_OBS,
     DENSITY_REASON,
     DENSITY_STATUS,
+    MIN_ANALYSIS_OBS,
+    PRICE_COL,
     Path,
     UTC,
-    datetime,
-    PRICE_COL,
+    analysis_note,
     build_rd_sample,
+    datetime,
     default_balance_covariates,
     make_manual_rd_plot,
     pd,
     run_balance_tests,
     summarize_rdrobust,
-    transform_for_outcome,
     try_rdrobust,
     write_json,
 ):
@@ -775,6 +1402,8 @@ def _(  # noqa: C901, PLR0915
         balance_covariates,
         export_analysis_sample,
         export_balance_tests,
+        outcome_specs_by_name,
+        pre_round_lot_required,
     ):
         """Run the full RD workflow for one outcome and save artifacts.
 
@@ -800,6 +1429,10 @@ def _(  # noqa: C901, PLR0915
             Whether to save the analysis sample CSV.
         export_balance_tests
             Whether to save the balance test CSV.
+        outcome_specs_by_name
+            Outcome metadata keyed by outcome name.
+        pre_round_lot_required
+            Required pre-reform round lot.
 
         Returns
         -------
@@ -807,11 +1440,14 @@ def _(  # noqa: C901, PLR0915
             Summary dictionary, artifact records, and preview plot path.
 
         """
-        transform = transform_for_outcome(y_stem)
+        outcome_spec = outcome_specs_by_name[y_stem]
         summary = {
             "status": "ok",
             "outcome": y_stem,
-            "transform": transform,
+            "display_name": outcome_spec["display_name"],
+            "side": outcome_spec["side"],
+            "family": outcome_spec["family"],
+            "transform": outcome_spec["transform"],
             "cutoff": cutoff,
             "upper_bound": upper_bound,
             "enforce_rule_consistency": enforce_rule_consistency,
@@ -834,15 +1470,18 @@ def _(  # noqa: C901, PLR0915
                 cutoff=cutoff,
                 upper_bound=upper_bound,
                 enforce_rule_consistency=enforce_rule_consistency,
+                outcome_specs_by_name=outcome_specs_by_name,
+                pre_round_lot_required=pre_round_lot_required,
             )
             if len(analysis_df) < MIN_ANALYSIS_OBS:
                 message = f"Too few observations after restrictions: n={len(analysis_df)}"
-                raise ValueError(message)  # noqa: TRY301
+                raise ValueError(message)
 
             summary["n_analysis"] = len(analysis_df)
             summary["n_left"] = int((analysis_df["running"] <= 0).sum())
             summary["n_right"] = int((analysis_df["running"] > 0).sum())
             summary["n_actual_treated"] = int(analysis_df["D_actual"].sum())
+            summary["n_rule_consistent"] = int(analysis_df["rule_consistent"].sum())
 
             if export_analysis_sample:
                 sample_path = output_dir / f"analysis_sample__{y_stem}.csv"
@@ -875,18 +1514,16 @@ def _(  # noqa: C901, PLR0915
             rd_summary["auto_error"] = rd_meta["auto_error"]
             summary["rdrobust"] = rd_summary
 
-            h_left = rd_summary["bandwidth_h_left"]
-            h_right = rd_summary["bandwidth_h_right"]
             plot_path = output_dir / f"rd_plot__{y_stem}.png"
             make_manual_rd_plot(
                 analysis_df,
                 cutoff=cutoff,
                 outpath=plot_path,
-                y_label=f"Delta {y_stem} ({transform})",
-                title=f"RD at $250 cutoff: {y_stem}",
+                y_label=f"Delta {outcome_spec['display_name']} ({outcome_spec['transform']})",
+                title=f"RD at $250 cutoff: {outcome_spec['display_name']}",
                 bins_per_side=bins_per_side,
-                h_left=h_left,
-                h_right=h_right,
+                h_left=rd_summary["bandwidth_h_left"],
+                h_right=rd_summary["bandwidth_h_right"],
             )
             summary["plot_png"] = str(plot_path)
             preview_plot_path = plot_path
@@ -945,6 +1582,23 @@ def _(  # noqa: C901, PLR0915
         export_analysis_sample,
         export_balance_tests,
         input_csv_path,
+        cta_symbol_dir,
+        price_column,
+        pair_label,
+        trade_exchange,
+        quote_exchange,
+        pre_round_lot_required,
+        n_pair_ok_rows,
+        n_pair_symbols_any_date,
+        n_pair_symbols_both_dates,
+        n_panel_symbols,
+        n_panel_symbols_with_price,
+        n_both_dates_symbols_with_price,
+        n_both_dates_symbols_missing_price,
+        n_round_lot_symbols,
+        n_cta_files,
+        n_cta_symbols,
+        outcome_specs_by_name,
     ):
         """Run the RD export workflow for every available outcome.
 
@@ -971,7 +1625,41 @@ def _(  # noqa: C901, PLR0915
         export_balance_tests
             Whether to save balance CSVs.
         input_csv_path
-            Resolved panel CSV path.
+            Resolved cross-K summary path.
+        cta_symbol_dir
+            Resolved CTA price directory.
+        price_column
+            CTA price column used to build the running variable.
+        pair_label
+            Exchange-pair label.
+        trade_exchange
+            Trade exchange code.
+        quote_exchange
+            Quote exchange code.
+        pre_round_lot_required
+            Required pre-reform round lot.
+        n_pair_ok_rows
+            Count of ok pair rows in the long cross-K input.
+        n_pair_symbols_any_date
+            Count of pair symbols on either date.
+        n_pair_symbols_both_dates
+            Count of pair symbols observed on both dates.
+        n_panel_symbols
+            Count of symbols in the wide outcome panel.
+        n_panel_symbols_with_price
+            Count of symbols with any matched CTA mean close.
+        n_both_dates_symbols_with_price
+            Count of two-date symbols with matched CTA mean close.
+        n_both_dates_symbols_missing_price
+            Count of two-date symbols missing CTA mean close.
+        n_round_lot_symbols
+            Count of symbols with any round-lot data.
+        n_cta_files
+            Number of CTA September files read.
+        n_cta_symbols
+            Number of symbols in the CTA mean-close table.
+        outcome_specs_by_name
+            Outcome metadata keyed by outcome name.
 
         Returns
         -------
@@ -995,6 +1683,8 @@ def _(  # noqa: C901, PLR0915
                 balance_covariates=balance_covariates,
                 export_analysis_sample=export_analysis_sample,
                 export_balance_tests=export_balance_tests,
+                outcome_specs_by_name=outcome_specs_by_name,
+                pre_round_lot_required=pre_round_lot_required,
             )
             summary_rows.append(outcome_summary)
             artifact_rows.extend(outcome_artifacts)
@@ -1063,14 +1753,33 @@ def _(  # noqa: C901, PLR0915
         run_manifest = {
             "created_at_utc": datetime.now(UTC),
             "input_csv_path": str(input_csv_path),
+            "cta_symbol_dir": str(cta_symbol_dir),
             "output_dir": str(output_dir),
+            "pair_label": pair_label,
+            "trade_exchange": trade_exchange,
+            "quote_exchange": quote_exchange,
             "date_pre": DATE_PRE,
+            "date_post": DATE_POST,
+            "price_column": price_column,
+            "running_variable": PRICE_COL,
             "cutoff": cutoff,
             "upper_bound": upper_bound,
+            "pre_round_lot_required": pre_round_lot_required,
             "enforce_rule_consistency": enforce_rule_consistency,
             "available_y_stems": list(available_y_stems),
+            "n_pair_ok_rows": n_pair_ok_rows,
+            "n_pair_symbols_any_date": n_pair_symbols_any_date,
+            "n_pair_symbols_both_dates": n_pair_symbols_both_dates,
+            "n_panel_symbols": n_panel_symbols,
+            "n_panel_symbols_with_price": n_panel_symbols_with_price,
+            "n_both_dates_symbols_with_price": n_both_dates_symbols_with_price,
+            "n_both_dates_symbols_missing_price": n_both_dates_symbols_missing_price,
+            "n_round_lot_symbols": n_round_lot_symbols,
+            "n_cta_files": n_cta_files,
+            "n_cta_symbols": n_cta_symbols,
             "density_status": DENSITY_STATUS,
             "density_reason": DENSITY_REASON,
+            "analysis_note": analysis_note,
             "artifact_files": artifact_manifest_df.to_dict(orient="records"),
         }
         run_manifest_path = output_dir / "run_manifest.json"
@@ -1094,14 +1803,7 @@ def _(  # noqa: C901, PLR0915
 
         return summary_all_df, artifact_manifest_df, run_manifest, preview_plot_path
 
-    return run_batch_workflow, run_outcome_workflow
-
-
-@app.cell
-def _(infer_available_y_stems, pd, resolved_input_csv_path):
-    raw_df = pd.read_csv(resolved_input_csv_path)
-    available_y_stems = infer_available_y_stems(raw_df.columns)
-    return available_y_stems, raw_df
+    return (run_batch_workflow,)
 
 
 @app.cell
@@ -1109,20 +1811,31 @@ def _(
     available_y_stems,
     balance_covariates,
     bins_per_side,
+    cta_mean_close_df,
     cutoff,
     enforce_rule_consistency,
     export_analysis_sample,
     export_balance_tests,
-    panel_csv_stem,
-    pd,
-    raw_df,
+    input_overview_df,
+    outcome_specs_by_name,
+    pair_label,
+    pair_ok_df,
+    pair_symbols_both_dates,
+    panel_df,
+    pre_round_lot_required,
+    price_column,
+    quote_exchange,
+    resolved_cta_symbol_dir,
     resolved_input_csv_path,
     resolved_output_dir,
+    round_lot_panel_df,
     run_batch_workflow,
+    trade_exchange,
     upper_bound,
 ):
+    input_row = input_overview_df.iloc[0]
     summary_all_df, artifact_manifest_df, run_manifest, preview_plot_path = run_batch_workflow(
-        raw_df,
+        panel_df,
         available_y_stems=available_y_stems,
         cutoff=cutoff,
         upper_bound=upper_bound,
@@ -1133,23 +1846,26 @@ def _(
         export_analysis_sample=export_analysis_sample,
         export_balance_tests=export_balance_tests,
         input_csv_path=resolved_input_csv_path,
+        cta_symbol_dir=resolved_cta_symbol_dir,
+        price_column=price_column,
+        pair_label=pair_label,
+        trade_exchange=trade_exchange,
+        quote_exchange=quote_exchange,
+        pre_round_lot_required=pre_round_lot_required,
+        n_pair_ok_rows=len(pair_ok_df),
+        n_pair_symbols_any_date=int(pair_ok_df["symbol"].nunique()),
+        n_pair_symbols_both_dates=len(pair_symbols_both_dates),
+        n_panel_symbols=int(panel_df["symbol"].nunique()),
+        n_panel_symbols_with_price=int(panel_df["mean_close_202509"].notna().sum()),
+        n_both_dates_symbols_with_price=int(input_row["n_both_dates_symbols_with_price"]),
+        n_both_dates_symbols_missing_price=int(input_row["n_both_dates_symbols_missing_price"]),
+        n_round_lot_symbols=int(round_lot_panel_df["symbol"].nunique()),
+        n_cta_files=len(sorted(resolved_cta_symbol_dir.glob("CTA.Symbol.File.202509*.csv"))),
+        n_cta_symbols=int(cta_mean_close_df["symbol"].nunique()),
+        outcome_specs_by_name=outcome_specs_by_name,
     )
-    input_overview_df = pd.DataFrame(
-        [
-            {
-                "input_csv_path": str(resolved_input_csv_path),
-                "panel_csv_stem": panel_csv_stem,
-                "output_dir": str(resolved_output_dir),
-                "n_raw_rows": len(raw_df),
-                "n_outcomes": len(available_y_stems),
-            }
-        ]
-    )
-    outcome_list_df = pd.DataFrame({"outcome": available_y_stems})
     return (
         artifact_manifest_df,
-        input_overview_df,
-        outcome_list_df,
         preview_plot_path,
         run_manifest,
         summary_all_df,
@@ -1157,48 +1873,75 @@ def _(
 
 
 @app.cell
+def _(mo):
+    results_section = mo.md(
+        """
+        ## Results
+
+        This section reports input coverage and the per-outcome RD summaries.
+        """
+    )
+    results_section
+    return
+
+
+@app.cell
 def _(input_overview_df):
-    input_overview_df  # noqa: B018
+    input_overview_df
     return
 
 
 @app.cell
 def _(outcome_list_df):
-    outcome_list_df  # noqa: B018
+    outcome_list_df
     return
 
 
 @app.cell
 def _(summary_all_df):
-    summary_all_df  # noqa: B018
+    summary_all_df
+    return
+
+
+@app.cell
+def _(mo):
+    artifacts_section = mo.md(
+        """
+        ## Artifacts
+
+        This section lists the written files and shows one preview RD plot from
+        the first successful outcome.
+        """
+    )
+    artifacts_section
+    return
+
+
+@app.cell
+def _(mo, mpimg, plt, preview_plot_path):
+    if preview_plot_path is None:
+        preview_display = mo.md("No successful RD plot was generated.")
+    else:
+        preview_plot_image = mpimg.imread(preview_plot_path)
+        preview_plot_figure, axis = plt.subplots(figsize=(9, 5.2))
+        axis.imshow(preview_plot_image)
+        axis.axis("off")
+        axis.set_title(str(preview_plot_path))
+        preview_plot_figure.tight_layout()
+        preview_display = preview_plot_figure
+    preview_display
     return
 
 
 @app.cell
 def _(artifact_manifest_df):
-    artifact_manifest_df  # noqa: B018
-    return
-
-
-@app.cell
-def _(mpimg, plt, preview_plot_path):
-    if preview_plot_path is None:
-        preview_plot = None
-    else:
-        preview_image = mpimg.imread(preview_plot_path)
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.imshow(preview_image)
-        ax.axis("off")
-        ax.set_title(str(preview_plot_path))
-        fig.tight_layout()
-        preview_plot = fig
-    preview_plot  # noqa: B018
+    artifact_manifest_df
     return
 
 
 @app.cell
 def _(run_manifest):
-    run_manifest  # noqa: B018
+    run_manifest
     return
 
 

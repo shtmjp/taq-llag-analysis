@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-
-RAW_ROOT_DIR = Path("data/datasets/dailytaq2")
-TRADE_OUTPUT_DIR = Path("data/filtered/trade")
-QUOTE_OUTPUT_DIR = Path("data/filtered/quote")
+REPO_ROOT = Path(__file__).parent.parent.parent.parent
+RAW_ROOT_DIR = REPO_ROOT / "data/datasets/dailytaq2"
+TRADE_OUTPUT_DIR = REPO_ROOT / "data/filtered/trade"
+QUOTE_OUTPUT_DIR = REPO_ROOT / "data/filtered/quote"
 TRADE_AUDIT_DIR = TRADE_OUTPUT_DIR / "_audit"
 QUOTE_AUDIT_DIR = QUOTE_OUTPUT_DIR / "_audit"
 
