@@ -1,0 +1,4 @@
+group_label,group_order,outcome,display_name,side,family,transform,actual_transition,n_obs,mean_delta,median_delta,std_delta,mean_y_pre,mean_y_post
+stay100,0,positive_total,Positive total,positive,sum,log1p,100->100,3202,0.017882067786901712,0.027128594472714207,0.3756385632879181,8.815709015278607,8.8031801236863
+to40,1,positive_total,Positive total,positive,sum,log1p,100->40,208,-0.07913742232563502,-0.08790070207941869,0.32830297483635135,5.557170762343626,5.111409029980875
+to10,2,positive_total,Positive total,positive,sum,log1p,100->10,11,0.03826236025845778,-0.2065289952273308,0.5043119214702745,5.612632237527536,6.7258054230970234

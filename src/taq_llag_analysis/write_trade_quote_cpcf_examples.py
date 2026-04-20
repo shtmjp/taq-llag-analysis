@@ -44,6 +44,10 @@ U_GRID_SPEC: dict[str, object] = {
     "num": 2001,
     "dtype": "float64",
 }
+FULL_MODE_REQUIRED_COLUMNS: tuple[str, ...] = (
+    "bandwidth",
+    "closest_mode_to_zero_sec",
+)
 
 
 def _u_grid() -> np.ndarray:
@@ -95,6 +99,37 @@ def _modes_frame(run_dir: Path) -> pl.DataFrame:
         run_dir / MODES_FILENAME,
         schema_overrides={"date_yyyymmdd": pl.String},
     )
+
+
+def _validate_cpcf_source_run(
+    run_dir: Path,
+    cross_k_summary_df: pl.DataFrame,
+) -> None:
+    missing_columns = sorted(
+        column_name
+        for column_name in FULL_MODE_REQUIRED_COLUMNS
+        if column_name not in cross_k_summary_df.columns
+    )
+    modes_path = run_dir / MODES_FILENAME
+
+    if not modes_path.exists() and missing_columns:
+        missing_text = ", ".join(missing_columns)
+        msg = (
+            "CPCF example plots require a full mode-summary run, but "
+            f"{run_dir} looks like a cross-K-only output: {MODES_FILENAME} is missing "
+            f"and {CROSS_K_SUMMARY_FILENAME} does not contain {missing_text}."
+        )
+        raise ValueError(msg)
+    if not modes_path.exists():
+        msg = f"CPCF example plots require {MODES_FILENAME} in {run_dir}, but it was not found."
+        raise ValueError(msg)
+    if missing_columns:
+        missing_text = ", ".join(missing_columns)
+        msg = (
+            "CPCF example plots require a full mode-summary run, but "
+            f"{CROSS_K_SUMMARY_FILENAME} in {run_dir} is missing {missing_text}."
+        )
+        raise ValueError(msg)
 
 
 def _cross_k_row(
@@ -291,6 +326,7 @@ def build_cpcf_examples(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     cross_k_summary_df = _cross_k_summary_frame(source_run_dir)
+    _validate_cpcf_source_run(source_run_dir, cross_k_summary_df)
     modes_df = _modes_frame(source_run_dir)
     u_values = _u_grid()
 

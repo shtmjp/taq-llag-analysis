@@ -1,0 +1,4 @@
+group_label,group_order,outcome,display_name,side,family,transform,actual_transition,n_obs,mean_delta,median_delta,std_delta,mean_y_pre,mean_y_post
+stay100,0,negative_mid_range_share,Negative mid-range share,negative,share,signed,100->100,3195,-0.0017207006850601689,-0.0009497579889760632,0.08568726823298904,0.2822663964211324,0.28054569573607224
+to40,1,negative_mid_range_share,Negative mid-range share,negative,share,signed,100->40,207,0.012038903586394605,0.0153013910186523,0.05051277656771701,0.24322917860070678,0.2552680821871014
+to10,2,negative_mid_range_share,Negative mid-range share,negative,share,signed,100->10,11,0.01225659484942222,0.03216223198140011,0.04618579464300729,0.23402994584081924,0.24628654069024147
