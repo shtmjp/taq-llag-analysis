@@ -1,0 +1,313 @@
+{
+  "created_at_utc": "2026-04-19T15:39:20.993413+00:00",
+  "input_csv_path": "../data/derived/trade_quote_modes/my-run/cross_k_summary.csv",
+  "input_csv_stem": "cross_k_summary",
+  "output_dir": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ",
+  "pair_label": "QZ",
+  "trade_exchange": "Q",
+  "quote_exchange": "Z",
+  "date_pre": "20251031",
+  "date_post": "20251103",
+  "pre_round_lot_required": 100.0,
+  "allowed_post_round_lots": [
+    100.0,
+    40.0,
+    10.0
+  ],
+  "group_labels": [
+    "stay100",
+    "to40",
+    "to10"
+  ],
+  "available_outcomes": [
+    "negative_total",
+    "positive_total",
+    "negative_near_zero_share",
+    "negative_mid_range_share",
+    "negative_far_from_zero_share",
+    "positive_near_zero_share",
+    "positive_mid_range_share",
+    "positive_far_from_zero_share",
+    "mode_position_sec"
+  ],
+  "n_raw_rows": 2670597,
+  "n_pair_ok_rows": 4696,
+  "n_panel_symbols": 2692,
+  "n_round_lot_symbols": 11963,
+  "n_base_sample": 2691,
+  "base_transition_counts": {
+    "100->10": 4,
+    "100->100": 2611,
+    "100->40": 76
+  },
+  "n_successful_outcomes": 9,
+  "excluded_post_round_lot_counts": {},
+  "coefficient_plot_paths": {
+    "negative_total": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/coef_plot__negative_total.png",
+    "positive_total": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/coef_plot__positive_total.png",
+    "negative_shares": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/coef_plot__negative_shares.png",
+    "positive_shares": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/coef_plot__positive_shares.png",
+    "mode_position": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/coef_plot__mode_position.png"
+  },
+  "artifact_files": [
+    {
+      "outcome": "ALL",
+      "artifact_type": "coef_plot_png__mode_position",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/coef_plot__mode_position.png",
+      "exists": true
+    },
+    {
+      "outcome": "ALL",
+      "artifact_type": "coef_plot_png__negative_shares",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/coef_plot__negative_shares.png",
+      "exists": true
+    },
+    {
+      "outcome": "ALL",
+      "artifact_type": "coef_plot_png__negative_total",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/coef_plot__negative_total.png",
+      "exists": true
+    },
+    {
+      "outcome": "ALL",
+      "artifact_type": "coef_plot_png__positive_shares",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/coef_plot__positive_shares.png",
+      "exists": true
+    },
+    {
+      "outcome": "ALL",
+      "artifact_type": "coef_plot_png__positive_total",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/coef_plot__positive_total.png",
+      "exists": true
+    },
+    {
+      "outcome": "ALL",
+      "artifact_type": "summary_all_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/summary_all.csv",
+      "exists": true
+    },
+    {
+      "outcome": "ALL",
+      "artifact_type": "summary_all_json",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/summary_all.json",
+      "exists": true
+    },
+    {
+      "outcome": "mode_position_sec",
+      "artifact_type": "analysis_sample_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/analysis_sample__mode_position_sec.csv",
+      "exists": true
+    },
+    {
+      "outcome": "mode_position_sec",
+      "artifact_type": "boxplot_png",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/boxplot__mode_position_sec.png",
+      "exists": true
+    },
+    {
+      "outcome": "mode_position_sec",
+      "artifact_type": "group_summary_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/group_summary__mode_position_sec.csv",
+      "exists": true
+    },
+    {
+      "outcome": "mode_position_sec",
+      "artifact_type": "regression_json",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/regression__mode_position_sec.json",
+      "exists": true
+    },
+    {
+      "outcome": "negative_far_from_zero_share",
+      "artifact_type": "analysis_sample_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/analysis_sample__negative_far_from_zero_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "negative_far_from_zero_share",
+      "artifact_type": "boxplot_png",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/boxplot__negative_far_from_zero_share.png",
+      "exists": true
+    },
+    {
+      "outcome": "negative_far_from_zero_share",
+      "artifact_type": "group_summary_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/group_summary__negative_far_from_zero_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "negative_far_from_zero_share",
+      "artifact_type": "regression_json",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/regression__negative_far_from_zero_share.json",
+      "exists": true
+    },
+    {
+      "outcome": "negative_mid_range_share",
+      "artifact_type": "analysis_sample_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/analysis_sample__negative_mid_range_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "negative_mid_range_share",
+      "artifact_type": "boxplot_png",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/boxplot__negative_mid_range_share.png",
+      "exists": true
+    },
+    {
+      "outcome": "negative_mid_range_share",
+      "artifact_type": "group_summary_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/group_summary__negative_mid_range_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "negative_mid_range_share",
+      "artifact_type": "regression_json",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/regression__negative_mid_range_share.json",
+      "exists": true
+    },
+    {
+      "outcome": "negative_near_zero_share",
+      "artifact_type": "analysis_sample_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/analysis_sample__negative_near_zero_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "negative_near_zero_share",
+      "artifact_type": "boxplot_png",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/boxplot__negative_near_zero_share.png",
+      "exists": true
+    },
+    {
+      "outcome": "negative_near_zero_share",
+      "artifact_type": "group_summary_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/group_summary__negative_near_zero_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "negative_near_zero_share",
+      "artifact_type": "regression_json",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/regression__negative_near_zero_share.json",
+      "exists": true
+    },
+    {
+      "outcome": "negative_total",
+      "artifact_type": "analysis_sample_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/analysis_sample__negative_total.csv",
+      "exists": true
+    },
+    {
+      "outcome": "negative_total",
+      "artifact_type": "boxplot_png",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/boxplot__negative_total.png",
+      "exists": true
+    },
+    {
+      "outcome": "negative_total",
+      "artifact_type": "group_summary_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/group_summary__negative_total.csv",
+      "exists": true
+    },
+    {
+      "outcome": "negative_total",
+      "artifact_type": "regression_json",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/regression__negative_total.json",
+      "exists": true
+    },
+    {
+      "outcome": "positive_far_from_zero_share",
+      "artifact_type": "analysis_sample_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/analysis_sample__positive_far_from_zero_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "positive_far_from_zero_share",
+      "artifact_type": "boxplot_png",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/boxplot__positive_far_from_zero_share.png",
+      "exists": true
+    },
+    {
+      "outcome": "positive_far_from_zero_share",
+      "artifact_type": "group_summary_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/group_summary__positive_far_from_zero_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "positive_far_from_zero_share",
+      "artifact_type": "regression_json",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/regression__positive_far_from_zero_share.json",
+      "exists": true
+    },
+    {
+      "outcome": "positive_mid_range_share",
+      "artifact_type": "analysis_sample_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/analysis_sample__positive_mid_range_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "positive_mid_range_share",
+      "artifact_type": "boxplot_png",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/boxplot__positive_mid_range_share.png",
+      "exists": true
+    },
+    {
+      "outcome": "positive_mid_range_share",
+      "artifact_type": "group_summary_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/group_summary__positive_mid_range_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "positive_mid_range_share",
+      "artifact_type": "regression_json",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/regression__positive_mid_range_share.json",
+      "exists": true
+    },
+    {
+      "outcome": "positive_near_zero_share",
+      "artifact_type": "analysis_sample_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/analysis_sample__positive_near_zero_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "positive_near_zero_share",
+      "artifact_type": "boxplot_png",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/boxplot__positive_near_zero_share.png",
+      "exists": true
+    },
+    {
+      "outcome": "positive_near_zero_share",
+      "artifact_type": "group_summary_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/group_summary__positive_near_zero_share.csv",
+      "exists": true
+    },
+    {
+      "outcome": "positive_near_zero_share",
+      "artifact_type": "regression_json",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/regression__positive_near_zero_share.json",
+      "exists": true
+    },
+    {
+      "outcome": "positive_total",
+      "artifact_type": "analysis_sample_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/analysis_sample__positive_total.csv",
+      "exists": true
+    },
+    {
+      "outcome": "positive_total",
+      "artifact_type": "boxplot_png",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/boxplot__positive_total.png",
+      "exists": true
+    },
+    {
+      "outcome": "positive_total",
+      "artifact_type": "group_summary_csv",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/group_summary__positive_total.csv",
+      "exists": true
+    },
+    {
+      "outcome": "positive_total",
+      "artifact_type": "regression_json",
+      "path": "output/cross_k_sum_share_round_lot_effects/cross_k_summary_QZ/regression__positive_total.json",
+      "exists": true
+    }
+  ],
+  "analysis_note": "Observed actual round-lot transition comparison only; not a causal RD design."
+}

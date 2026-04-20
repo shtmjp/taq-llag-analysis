@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -17,51 +15,36 @@ import ppllag
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
+from ._trade_quote_common import (
+    ALLOW_NOT_SIMPLE,
+    CROSS_K_SUMMARY_FILENAME,
+    CROSS_K_WINDOWS,
+    KERNEL,
+    MODE_SUMMARY_OUTPUT_BASE_DIR,
+    MODES_FILENAME,
+    OBS_WINDOW,
+    QUOTE_BASE_DIR,
+    TRADE_BASE_DIR,
+    _event_arrays_by_exchange,
+    _scan_event_counts,
+)
 from .preprocess.inventory import symbols_with_prefix
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator, Mapping, Sequence
+    from collections.abc import Iterator, Mapping, Sequence
 
 
-TRADE_BASE_DIR = Path("data/filtered/trade")
-QUOTE_BASE_DIR = Path("data/filtered/quote")
-OUTPUT_BASE_DIR = Path("data/derived/trade_quote_modes")
+PairKey = tuple[str, str, str, str]
+ScanKey = tuple[str, str]
+
 TARGET_DATES: tuple[str, ...] = ("20251031", "20251103")
 MIN_EVENTS_PER_SIDE = 100
 N_JOBS = 1
-OBS_WINDOW = (35_100.0, 56_700.0)
 U_RANGE = (-1.0, 1.0)
 BW_CANDIDATES = np.array([1e-7, 1e-6, 1e-5, 1e-4], dtype=np.float64)
-U_GRID_SPEC: dict[str, object] = {
-    "start": -1e-3,
-    "stop": 1e-3,
-    "num": 2001,
-    "dtype": "float64",
-}
-KERNEL = "tent"
-ALLOW_NOT_SIMPLE = False
 JOBLIB_BACKEND = "loky"
-CROSS_K_WINDOWS: dict[str, tuple[float, float]] = {
-    "cross_k_neg_1e3_1e4": (-1e-3, -1e-4),
-    "cross_k_neg_1e4_1e5": (-1e-4, -1e-5),
-    "cross_k_neg_1e5_0": (-1e-5, 0.0),
-    "cross_k_pos_0_1e5": (0.0, 1e-5),
-    "cross_k_pos_1e5_1e4": (1e-5, 1e-4),
-    "cross_k_pos_1e4_1e3": (1e-4, 1e-3),
-}
 
-SYMBOL_INVENTORY_SCHEMA: dict[str, pl.DataType] = {
-    "date_yyyymmdd": pl.String,
-    "symbol": pl.String,
-    "trade_path_exists": pl.Boolean,
-    "quote_path_exists": pl.Boolean,
-    "n_trade_exchanges": pl.Int64,
-    "n_quote_exchanges": pl.Int64,
-    "n_candidate_pairs": pl.Int64,
-    "n_pairs_ge_min_events": pl.Int64,
-}
-PAIR_SUMMARY_SCHEMA: dict[str, pl.DataType] = {
-    "run_id": pl.String,
+CROSS_K_SUMMARY_SCHEMA: dict[str, pl.DataType] = {
     "date_yyyymmdd": pl.String,
     "symbol": pl.String,
     "trade_exchange": pl.String,
@@ -84,7 +67,6 @@ PAIR_SUMMARY_SCHEMA: dict[str, pl.DataType] = {
     "error_message": pl.String,
 }
 MODES_SCHEMA: dict[str, pl.DataType] = {
-    "run_id": pl.String,
     "date_yyyymmdd": pl.String,
     "symbol": pl.String,
     "trade_exchange": pl.String,
@@ -104,60 +86,41 @@ class _SymbolScan:
     quote_counts: dict[str, int]
 
     @property
-    def trade_path_exists(self) -> bool:
-        return self.trade_path.exists()
-
-    @property
-    def quote_path_exists(self) -> bool:
-        return self.quote_path.exists()
-
-    @property
     def candidate_pairs(self) -> list[tuple[str, str]]:
         return _candidate_pairs(self.trade_counts, self.quote_counts)
 
-    def n_pairs_ge_min_events(self, min_events_per_side: int) -> int:
-        return sum(
-            1
-            for trade_exchange, quote_exchange in self.candidate_pairs
-            if self.trade_counts[trade_exchange] >= min_events_per_side
-            and self.quote_counts[quote_exchange] >= min_events_per_side
-        )
+
+@dataclass(frozen=True)
+class _ScanJob:
+    scan: _SymbolScan
+    candidate_pairs: tuple[tuple[str, str], ...]
+
+    @property
+    def scan_key(self) -> ScanKey:
+        return (self.scan.date_yyyymmdd, self.scan.symbol)
+
+    @property
+    def n_pairs(self) -> int:
+        return len(self.candidate_pairs)
 
 
-def _timestamp_to_time_expr(timestamp_col: str) -> pl.Expr:
-    timestamp = pl.col(timestamp_col)
-    hh = (timestamp // 10_000_000_000_000).cast(pl.Float64)
-    mm = ((timestamp // 100_000_000_000) % 100).cast(pl.Float64)
-    ss = ((timestamp // 1_000_000_000) % 100).cast(pl.Float64)
-    subsec = (timestamp % 1_000_000_000).cast(pl.Float64) / 1_000_000_000.0
-    return (hh * 3600.0 + mm * 60.0 + ss + subsec).alias("event_time")
+@dataclass(frozen=True)
+class _ScanResult:
+    scan_key: ScanKey
+    cross_k_rows: list[dict[str, object]]
+    mode_rows: list[dict[str, object]]
+
+    @property
+    def n_pairs(self) -> int:
+        return len(self.cross_k_rows)
 
 
-def _event_time_frame(
-    path: Path,
-    timestamp_col: str,
-    exchanges: Iterable[str] | None,
-    *,
-    obs_window: tuple[float, float],
-) -> pl.DataFrame:
-    if not path.exists():
-        return pl.DataFrame(schema={"Exchange": pl.String, "event_time": pl.Float64})
-
-    event_df = pl.read_parquet(path, columns=["Exchange", timestamp_col])
-    if exchanges is not None:
-        selected_exchanges = sorted(set(exchanges))
-        if not selected_exchanges:
-            return pl.DataFrame(schema={"Exchange": pl.String, "event_time": pl.Float64})
-        event_df = event_df.filter(pl.col("Exchange").is_in(selected_exchanges))
-
-    return (
-        event_df.group_by(["Exchange", timestamp_col])
-        .agg(pl.len().alias("n_rows"))
-        .with_columns(_timestamp_to_time_expr(timestamp_col))
-        .filter(pl.col("event_time").is_between(obs_window[0], obs_window[1]))
-        .select(["Exchange", "event_time"])
-        .sort(["Exchange", "event_time"])
-    )
+@dataclass(frozen=True)
+class _ExistingOutputs:
+    cross_k_df: pl.DataFrame
+    modes_df: pl.DataFrame
+    cross_k_rows_by_key: dict[PairKey, dict[str, object]]
+    mode_counts_by_key: dict[PairKey, int]
 
 
 def _csv_frame(
@@ -166,56 +129,7 @@ def _csv_frame(
 ) -> pl.DataFrame:
     if not rows:
         return pl.DataFrame(schema=schema)
-
     return pl.from_dicts(rows, schema=schema)
-
-
-def _package_version(name: str) -> str | None:
-    try:
-        return version(name)
-    except PackageNotFoundError:
-        return None
-
-
-def _git_output(args: Sequence[str]) -> str | None:
-    completed = subprocess.run(  # noqa: S603
-        args,
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if completed.returncode != 0:
-        return None
-    return completed.stdout.strip()
-
-
-def _git_metadata() -> dict[str, object]:
-    git_sha = _git_output(("git", "rev-parse", "HEAD"))
-    git_status = _git_output(("git", "status", "--short"))
-    return {
-        "commit_sha": git_sha,
-        "dirty": bool(git_status),
-    }
-
-
-def _scan_event_counts(
-    path: Path,
-    timestamp_col: str,
-    *,
-    obs_window: tuple[float, float],
-) -> dict[str, int]:
-    counts_df = (
-        _event_time_frame(
-            path,
-            timestamp_col,
-            exchanges=None,
-            obs_window=obs_window,
-        )
-        .group_by("Exchange")
-        .agg(pl.len().alias("n_events"))
-        .sort("Exchange")
-    )
-    return {exchange: int(n_events) for exchange, n_events in counts_df.iter_rows()}
 
 
 def _candidate_pairs(
@@ -230,32 +144,134 @@ def _candidate_pairs(
     ]
 
 
-def _event_arrays_by_exchange(
-    path: Path,
-    timestamp_col: str,
-    exchanges: Iterable[str],
-    *,
-    obs_window: tuple[float, float],
-) -> dict[str, np.ndarray]:
-    selected_exchanges = sorted(set(exchanges))
-    if not selected_exchanges:
-        return {}
+def _pair_key(
+    date_yyyymmdd: str,
+    symbol: str,
+    trade_exchange: str,
+    quote_exchange: str,
+) -> PairKey:
+    return (date_yyyymmdd, symbol, trade_exchange, quote_exchange)
 
-    event_df = _event_time_frame(
-        path,
-        timestamp_col,
-        exchanges=selected_exchanges,
-        obs_window=obs_window,
+
+def _scan_key_from_row(row: Mapping[str, object]) -> ScanKey:
+    return (str(row["date_yyyymmdd"]), str(row["symbol"]))
+
+
+def _cross_k_summary_path(output_dir: Path) -> Path:
+    return output_dir / CROSS_K_SUMMARY_FILENAME
+
+
+def _modes_path(output_dir: Path) -> Path:
+    return output_dir / MODES_FILENAME
+
+
+def _read_csv_if_exists(
+    path: Path,
+    schema: Mapping[str, pl.DataType],
+) -> pl.DataFrame:
+    if not path.exists():
+        return pl.DataFrame(schema=schema)
+    return pl.read_csv(path, schema_overrides=schema)
+
+
+def _write_csv_frame(path: Path, frame: pl.DataFrame) -> None:
+    frame.write_csv(path)
+
+
+def _append_csv_rows(
+    path: Path,
+    rows: list[dict[str, object]],
+    schema: Mapping[str, pl.DataType],
+) -> None:
+    if not rows:
+        return
+    frame = _csv_frame(rows, schema)
+    include_header = (not path.exists()) or path.stat().st_size == 0
+    with path.open("a", encoding="utf-8", newline="") as handle:
+        frame.write_csv(handle, include_header=include_header)
+
+
+def _ensure_output_files(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cross_k_summary_path = _cross_k_summary_path(output_dir)
+    modes_path = _modes_path(output_dir)
+    if not cross_k_summary_path.exists():
+        _write_csv_frame(
+            cross_k_summary_path,
+            pl.DataFrame(schema=CROSS_K_SUMMARY_SCHEMA),
+        )
+    if not modes_path.exists():
+        _write_csv_frame(modes_path, pl.DataFrame(schema=MODES_SCHEMA))
+
+
+def _load_existing_outputs(output_dir: Path) -> _ExistingOutputs:
+    cross_k_df = _read_csv_if_exists(
+        _cross_k_summary_path(output_dir),
+        CROSS_K_SUMMARY_SCHEMA,
+    )
+    modes_df = _read_csv_if_exists(_modes_path(output_dir), MODES_SCHEMA)
+
+    cross_k_rows_by_key: dict[PairKey, dict[str, object]] = {}
+    for row in cross_k_df.iter_rows(named=True):
+        cross_k_rows_by_key[
+            _pair_key(
+                str(row["date_yyyymmdd"]),
+                str(row["symbol"]),
+                str(row["trade_exchange"]),
+                str(row["quote_exchange"]),
+            )
+        ] = row
+
+    mode_counts_by_key: dict[PairKey, int] = {}
+    for row in modes_df.iter_rows(named=True):
+        key = _pair_key(
+            str(row["date_yyyymmdd"]),
+            str(row["symbol"]),
+            str(row["trade_exchange"]),
+            str(row["quote_exchange"]),
+        )
+        mode_counts_by_key[key] = mode_counts_by_key.get(key, 0) + 1
+
+    return _ExistingOutputs(
+        cross_k_df=cross_k_df,
+        modes_df=modes_df,
+        cross_k_rows_by_key=cross_k_rows_by_key,
+        mode_counts_by_key=mode_counts_by_key,
     )
 
-    arrays_by_exchange: dict[str, np.ndarray] = {}
-    for exchange_df in event_df.partition_by("Exchange", maintain_order=False):
-        exchange = exchange_df.get_column("Exchange")[0]
-        arrays_by_exchange[exchange] = np.asarray(
-            exchange_df.get_column("event_time").to_numpy(),
-            dtype=np.float64,
-        )
-    return arrays_by_exchange
+
+def _drop_scan_rows(
+    frame: pl.DataFrame,
+    scan_keys: set[ScanKey],
+    schema: Mapping[str, pl.DataType],
+) -> pl.DataFrame:
+    if not scan_keys or frame.is_empty():
+        return frame
+    kept_rows = [
+        row for row in frame.iter_rows(named=True) if _scan_key_from_row(row) not in scan_keys
+    ]
+    return _csv_frame(kept_rows, schema)
+
+
+def _cleanup_incomplete_scan_rows(
+    output_dir: Path,
+    existing_outputs: _ExistingOutputs,
+    pending_scan_keys: set[ScanKey],
+) -> None:
+    if not pending_scan_keys:
+        return
+    cross_k_df = _drop_scan_rows(
+        existing_outputs.cross_k_df,
+        pending_scan_keys,
+        CROSS_K_SUMMARY_SCHEMA,
+    )
+    modes_df = _drop_scan_rows(
+        existing_outputs.modes_df,
+        pending_scan_keys,
+        MODES_SCHEMA,
+    )
+    _write_csv_frame(_cross_k_summary_path(output_dir), cross_k_df)
+    _write_csv_frame(_modes_path(output_dir), modes_df)
 
 
 def _closest_mode_to_zero(modes: np.ndarray) -> float | None:
@@ -348,128 +364,95 @@ def _run_id(
     return f"{dates_token}_min{min_events_per_side}{subset_token}_{timestamp_token}"
 
 
+def _resolve_output_dir(
+    *,
+    target_dates: Sequence[str],
+    min_events_per_side: int,
+    subset_requested: bool,
+    output_dir: Path | None,
+) -> Path:
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    created_at = datetime.now(UTC)
+    run_dir = MODE_SUMMARY_OUTPUT_BASE_DIR / _run_id(
+        target_dates=target_dates,
+        min_events_per_side=min_events_per_side,
+        created_at=created_at,
+        subset_requested=subset_requested,
+    )
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
+
+
 def _scan_jobs(
     scans: Sequence[_SymbolScan],
     max_pairs: int | None,
-) -> tuple[list[tuple[_SymbolScan, int]], int]:
-    jobs: list[tuple[_SymbolScan, int]] = []
+) -> tuple[list[_ScanJob], int]:
+    jobs: list[_ScanJob] = []
     total_progress_pairs = 0
     remaining_pairs = max_pairs
 
     for scan in scans:
-        n_candidate_pairs = len(scan.candidate_pairs)
-        if n_candidate_pairs == 0:
-            continue
-        if remaining_pairs is None:
-            pair_limit = n_candidate_pairs
-        else:
+        candidate_pairs = scan.candidate_pairs
+        if remaining_pairs is not None:
             if remaining_pairs <= 0:
                 break
-            pair_limit = min(n_candidate_pairs, remaining_pairs)
-            remaining_pairs -= pair_limit
-        jobs.append((scan, pair_limit))
-        total_progress_pairs += pair_limit
+            candidate_pairs = candidate_pairs[:remaining_pairs]
+            remaining_pairs -= len(candidate_pairs)
+        if not candidate_pairs:
+            continue
+        job = _ScanJob(scan=scan, candidate_pairs=tuple(candidate_pairs))
+        jobs.append(job)
+        total_progress_pairs += job.n_pairs
 
     return jobs, total_progress_pairs
 
 
-def _run_config_dict(
+def _is_completed_scan(
+    scan_job: _ScanJob,
+    existing_outputs: _ExistingOutputs,
+) -> bool:
+    # 再開時は expected pair がそろい、ok 行の mode 数も一致する scan だけを完了扱いにする。
+    for trade_exchange, quote_exchange in scan_job.candidate_pairs:
+        pair_key = _pair_key(
+            scan_job.scan.date_yyyymmdd,
+            scan_job.scan.symbol,
+            trade_exchange,
+            quote_exchange,
+        )
+        pair_row = existing_outputs.cross_k_rows_by_key.get(pair_key)
+        if pair_row is None:
+            return False
+        if pair_row["status"] != "ok":
+            continue
+        expected_mode_count = int(pair_row["mode_count"] or 0)
+        if existing_outputs.mode_counts_by_key.get(pair_key, 0) != expected_mode_count:
+            return False
+    return True
+
+
+def _analyze_scan_job(
     *,
-    run_id: str,
-    created_at: datetime,
-    target_dates: Sequence[str],
+    scan_job: _ScanJob,
     min_events_per_side: int,
-    n_jobs: int,
-    max_symbols: int | None,
-    max_pairs: int | None,
-    selected_symbols: Sequence[str] | None,
-    symbols_by_date: Mapping[str, Sequence[str]],
-    scans: Sequence[_SymbolScan],
-    scan_jobs: Sequence[tuple[_SymbolScan, int]],
-) -> dict[str, object]:
-    total_candidate_pairs = sum(len(scan.candidate_pairs) for scan in scans)
-    total_eligible_pairs = sum(scan.n_pairs_ge_min_events(min_events_per_side) for scan in scans)
-    total_scheduled_pairs = sum(pair_limit for _, pair_limit in scan_jobs)
-    git_metadata = _git_metadata()
-    return {
-        "run_id": run_id,
-        "created_at_utc": created_at.isoformat(),
-        "python_version": sys.version,
-        "package_versions": {
-            "joblib": _package_version("joblib"),
-            "numpy": _package_version("numpy"),
-            "polars": _package_version("polars"),
-            "ppllag": _package_version("ppllag"),
-            "tqdm": _package_version("tqdm"),
+) -> _ScanResult:
+    scan = scan_job.scan
+    eligible_trade_exchanges = sorted(
+        {
+            trade_exchange
+            for trade_exchange, _ in scan_job.candidate_pairs
+            if scan.trade_counts[trade_exchange] >= min_events_per_side
         },
-        "git": git_metadata,
-        "target_dates": list(target_dates),
-        "selected_symbols": list(selected_symbols) if selected_symbols is not None else None,
-        "symbols_by_date": {
-            date_yyyymmdd: list(date_symbols)
-            for date_yyyymmdd, date_symbols in symbols_by_date.items()
+    )
+    eligible_quote_exchanges = sorted(
+        {
+            quote_exchange
+            for _, quote_exchange in scan_job.candidate_pairs
+            if scan.quote_counts[quote_exchange] >= min_events_per_side
         },
-        "max_symbols": max_symbols,
-        "max_pairs": max_pairs,
-        "trade_base_dir": str(TRADE_BASE_DIR),
-        "quote_base_dir": str(QUOTE_BASE_DIR),
-        "pair_rule": "trade_exchange != quote_exchange",
-        "min_events_per_side": min_events_per_side,
-        "n_jobs": n_jobs,
-        "parallel_backend": JOBLIB_BACKEND if n_jobs != 1 else None,
-        "obs_window": list(OBS_WINDOW),
-        "u_range": list(U_RANGE),
-        "bw_candidates": BW_CANDIDATES.tolist(),
-        "kernel": KERNEL,
-        "allow_not_simple": ALLOW_NOT_SIMPLE,
-        "u_grid_spec": U_GRID_SPEC,
-        "event_definitions": {
-            "trade": (
-                'filter one exchange, collapse on ("Exchange", "Participant Timestamp"), '
-                "convert to float seconds, filter to obs_window, sort ascending"
-            ),
-            "quote": (
-                'filter one exchange, collapse on ("Exchange", "Participant_Timestamp"), '
-                "convert to float seconds, filter to obs_window, sort ascending"
-            ),
-        },
-        "cross_k_windows": {
-            window_name: list(window_values)
-            for window_name, window_values in CROSS_K_WINDOWS.items()
-        },
-        "cross_k_note": "ppllag.cross_k is experimental in the installed package.",
-        "inventory_summary": {
-            "n_symbol_rows": len(scans),
-            "n_candidate_pairs": total_candidate_pairs,
-            "n_pairs_ge_min_events": total_eligible_pairs,
-            "n_scheduled_pairs": total_scheduled_pairs,
-        },
-    }
-
-
-def _analyze_scan(
-    *,
-    scan: _SymbolScan,
-    run_id: str,
-    min_events_per_side: int,
-    pair_limit: int | None,
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    candidate_pairs = scan.candidate_pairs
-    if pair_limit is not None:
-        candidate_pairs = candidate_pairs[:pair_limit]
-    if not candidate_pairs:
-        return [], []
-
-    eligible_trade_exchanges = [
-        exchange
-        for exchange, n_events in scan.trade_counts.items()
-        if n_events >= min_events_per_side
-    ]
-    eligible_quote_exchanges = [
-        exchange
-        for exchange, n_events in scan.quote_counts.items()
-        if n_events >= min_events_per_side
-    ]
+    )
     trade_arrays = _event_arrays_by_exchange(
         scan.trade_path,
         "Participant Timestamp",
@@ -483,13 +466,12 @@ def _analyze_scan(
         obs_window=OBS_WINDOW,
     )
 
-    pair_rows: list[dict[str, object]] = []
+    cross_k_rows: list[dict[str, object]] = []
     mode_rows: list[dict[str, object]] = []
-    for trade_exchange, quote_exchange in candidate_pairs:
+    for trade_exchange, quote_exchange in scan_job.candidate_pairs:
         trade_n_events = scan.trade_counts[trade_exchange]
         quote_n_events = scan.quote_counts[quote_exchange]
-        pair_row: dict[str, object] = {
-            "run_id": run_id,
+        cross_k_row: dict[str, object] = {
             "date_yyyymmdd": scan.date_yyyymmdd,
             "symbol": scan.symbol,
             "trade_exchange": trade_exchange,
@@ -513,25 +495,16 @@ def _analyze_scan(
         }
 
         if trade_n_events < min_events_per_side or quote_n_events < min_events_per_side:
-            pair_row["status"] = "skipped_min_events"
-            pair_rows.append(pair_row)
+            cross_k_row["status"] = "skipped_min_events"
+            cross_k_rows.append(cross_k_row)
             continue
 
         trade_event_times = trade_arrays[trade_exchange]
         quote_event_times = quote_arrays[quote_exchange]
-        n_shared_event_times = _count_shared_event_times(
+        cross_k_row["n_shared_event_times"] = _count_shared_event_times(
             trade_event_times,
             quote_event_times,
         )
-        pair_row["n_shared_event_times"] = n_shared_event_times
-        if n_shared_event_times > 0 and not ALLOW_NOT_SIMPLE:
-            pair_row["status"] = "skipped_not_simple"
-            pair_row["error_type"] = "NotSimplePrecheck"
-            pair_row["error_message"] = (
-                f"trade and quote share {n_shared_event_times} event_time values"
-            )
-            pair_rows.append(pair_row)
-            continue
 
         start_time = time.perf_counter()
         try:
@@ -544,14 +517,17 @@ def _analyze_scan(
                 kernel=KERNEL,
                 allow_not_simple=ALLOW_NOT_SIMPLE,
             )
-            modes = ppllag.find_cpcf_modes(
-                trade_event_times,
-                quote_event_times,
-                u_range=U_RANGE,
-                obs_window=OBS_WINDOW,
-                bandwidth=bandwidth,
-                kernel=KERNEL,
-                allow_not_simple=ALLOW_NOT_SIMPLE,
+            modes = np.asarray(
+                ppllag.find_cpcf_modes(
+                    trade_event_times,
+                    quote_event_times,
+                    u_range=U_RANGE,
+                    obs_window=OBS_WINDOW,
+                    bandwidth=bandwidth,
+                    kernel=KERNEL,
+                    allow_not_simple=ALLOW_NOT_SIMPLE,
+                ),
+                dtype=np.float64,
             )
             cross_k_values = {
                 window_name: float(
@@ -564,16 +540,15 @@ def _analyze_scan(
                 )
                 for window_name, u_window in CROSS_K_WINDOWS.items()
             }
-            pair_row["status"] = "ok"
-            pair_row["bandwidth"] = float(bandwidth)
-            pair_row["mode_count"] = int(modes.size)
-            pair_row["closest_mode_to_zero_sec"] = _closest_mode_to_zero(modes)
-            pair_row["elapsed_sec"] = time.perf_counter() - start_time
-            pair_row.update(cross_k_values)
+            cross_k_row["status"] = "ok"
+            cross_k_row["bandwidth"] = float(bandwidth)
+            cross_k_row["mode_count"] = int(modes.size)
+            cross_k_row["closest_mode_to_zero_sec"] = _closest_mode_to_zero(modes)
+            cross_k_row["elapsed_sec"] = time.perf_counter() - start_time
+            cross_k_row.update(cross_k_values)
             for mode_index, mode_sec in enumerate(modes.tolist()):
                 mode_rows.append(
                     {
-                        "run_id": run_id,
                         "date_yyyymmdd": scan.date_yyyymmdd,
                         "symbol": scan.symbol,
                         "trade_exchange": trade_exchange,
@@ -583,30 +558,31 @@ def _analyze_scan(
                     },
                 )
         except Exception as exc:  # noqa: BLE001
-            pair_row["status"] = "error"
-            pair_row["elapsed_sec"] = time.perf_counter() - start_time
-            pair_row["error_type"] = type(exc).__name__
-            pair_row["error_message"] = str(exc)
+            cross_k_row["status"] = "error"
+            cross_k_row["elapsed_sec"] = time.perf_counter() - start_time
+            cross_k_row["error_type"] = type(exc).__name__
+            cross_k_row["error_message"] = str(exc)
 
-        pair_rows.append(pair_row)
+        cross_k_rows.append(cross_k_row)
 
-    return pair_rows, mode_rows
+    return _ScanResult(
+        scan_key=scan_job.scan_key,
+        cross_k_rows=cross_k_rows,
+        mode_rows=mode_rows,
+    )
 
 
 def _scan_results(
     *,
-    scan_jobs: Sequence[tuple[_SymbolScan, int]],
-    run_id: str,
+    scan_jobs: Sequence[_ScanJob],
     min_events_per_side: int,
     n_jobs: int,
-) -> Iterator[tuple[list[dict[str, object]], list[dict[str, object]]]]:
+) -> Iterator[_ScanResult]:
     if n_jobs == 1:
-        for scan, pair_limit in scan_jobs:
-            yield _analyze_scan(
-                scan=scan,
-                run_id=run_id,
+        for scan_job in scan_jobs:
+            yield _analyze_scan_job(
+                scan_job=scan_job,
                 min_events_per_side=min_events_per_side,
-                pair_limit=pair_limit,
             )
         return
 
@@ -616,15 +592,23 @@ def _scan_results(
         return_as="generator_unordered",
     )
     worker_jobs = (
-        delayed(_analyze_scan)(
-            scan=scan,
-            run_id=run_id,
+        delayed(_analyze_scan_job)(
+            scan_job=scan_job,
             min_events_per_side=min_events_per_side,
-            pair_limit=pair_limit,
         )
-        for scan, pair_limit in scan_jobs
+        for scan_job in scan_jobs
     )
     yield from parallel(worker_jobs)
+
+
+def _append_scan_result(output_dir: Path, scan_result: _ScanResult) -> None:
+    # worker は計算だけにして、CSV 追記は main process に寄せて書き込み競合を避ける。
+    _append_csv_rows(
+        _cross_k_summary_path(output_dir),
+        scan_result.cross_k_rows,
+        CROSS_K_SUMMARY_SCHEMA,
+    )
+    _append_csv_rows(_modes_path(output_dir), scan_result.mode_rows, MODES_SCHEMA)
 
 
 def build_mode_summary(
@@ -635,10 +619,10 @@ def build_mode_summary(
     max_pairs: int | None = None,
     min_events_per_side: int = MIN_EVENTS_PER_SIDE,
     n_jobs: int = N_JOBS,
-    output_base_dir: Path = OUTPUT_BASE_DIR,
+    output_dir: Path | None = None,
     show_progress: bool = True,
 ) -> Path:
-    """Run the trade-vs-quote batch study and write CSV/JSON artifacts.
+    """Run the trade-vs-quote batch study and update resumable CSV artifacts.
 
     Parameters
     ----------
@@ -650,7 +634,7 @@ def build_mode_summary(
     max_symbols
         Optional limit on the number of symbols per date, preserving sorted order.
     max_pairs
-        Optional cap on the number of candidate pairs written to the batch output.
+        Optional cap on the number of candidate pairs written to the output.
         Pairs are traversed in deterministic sorted order.
     min_events_per_side
         Minimum number of deduplicated events required on both trade and quote
@@ -658,109 +642,60 @@ def build_mode_summary(
     n_jobs
         Number of joblib worker processes. Use ``1`` for serial execution and
         ``-1`` to use all available cores.
-    output_base_dir
-        Parent directory for the batch run directory.
+    output_dir
+        Output directory used for CSV append and resume. If omitted, create a new
+        timestamped directory under ``data/derived/trade_quote_modes``.
     show_progress
-        If True, show a ``tqdm`` progress bar over candidate pairs.
+        If True, show a ``tqdm`` progress bar over scheduled candidate pairs.
 
     Returns
     -------
     pathlib.Path
-        Output run directory containing the JSON/CSV artifacts.
+        Output directory containing ``cross_k_summary.csv`` and ``modes.csv``.
 
     """
-    scans, symbols_by_date = _scan_symbols(
+    scans, _ = _scan_symbols(
         target_dates=target_dates,
         symbols=symbols,
         max_symbols=max_symbols,
     )
-    scan_jobs, total_progress_pairs = _scan_jobs(scans, max_pairs)
-    created_at = datetime.now(UTC)
-    run_id = _run_id(
+    scan_jobs, _ = _scan_jobs(scans, max_pairs)
+    run_dir = _resolve_output_dir(
         target_dates=target_dates,
         min_events_per_side=min_events_per_side,
-        created_at=created_at,
         subset_requested=(symbols is not None or max_symbols is not None or max_pairs is not None),
+        output_dir=output_dir,
     )
-    run_dir = output_base_dir / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    _ensure_output_files(run_dir)
 
-    run_config = _run_config_dict(
-        run_id=run_id,
-        created_at=created_at,
-        target_dates=target_dates,
-        min_events_per_side=min_events_per_side,
-        n_jobs=n_jobs,
-        max_symbols=max_symbols,
-        max_pairs=max_pairs,
-        selected_symbols=symbols,
-        symbols_by_date=symbols_by_date,
-        scans=scans,
-        scan_jobs=scan_jobs,
+    existing_outputs = _load_existing_outputs(run_dir)
+    completed_scan_keys = {
+        scan_job.scan_key
+        for scan_job in scan_jobs
+        if _is_completed_scan(scan_job, existing_outputs)
+    }
+    pending_scan_jobs = [
+        scan_job for scan_job in scan_jobs if scan_job.scan_key not in completed_scan_keys
+    ]
+    _cleanup_incomplete_scan_rows(
+        run_dir,
+        existing_outputs,
+        {scan_job.scan_key for scan_job in pending_scan_jobs},
     )
-    (run_dir / "run_config.json").write_text(
-        json.dumps(run_config, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-
-    symbol_inventory_rows: list[dict[str, object]] = []
-    total_candidate_pairs = 0
-    for scan in scans:
-        n_candidate_pairs = len(scan.candidate_pairs)
-        total_candidate_pairs += n_candidate_pairs
-        symbol_inventory_rows.append(
-            {
-                "date_yyyymmdd": scan.date_yyyymmdd,
-                "symbol": scan.symbol,
-                "trade_path_exists": scan.trade_path_exists,
-                "quote_path_exists": scan.quote_path_exists,
-                "n_trade_exchanges": len(scan.trade_counts),
-                "n_quote_exchanges": len(scan.quote_counts),
-                "n_candidate_pairs": n_candidate_pairs,
-                "n_pairs_ge_min_events": scan.n_pairs_ge_min_events(
-                    min_events_per_side,
-                ),
-            },
-        )
-
-    symbol_inventory_df = _csv_frame(symbol_inventory_rows, SYMBOL_INVENTORY_SCHEMA).sort(
-        ["date_yyyymmdd", "symbol"],
-    )
-    symbol_inventory_df.write_csv(run_dir / "symbol_inventory.csv")
-
-    pair_summary_rows: list[dict[str, object]] = []
-    modes_rows: list[dict[str, object]] = []
 
     with tqdm(
-        total=total_progress_pairs,
+        total=sum(scan_job.n_pairs for scan_job in pending_scan_jobs),
         desc="trade-quote pairs",
         disable=not show_progress,
     ) as progress_bar:
-        for scan_pair_rows, scan_mode_rows in _scan_results(
-            scan_jobs=scan_jobs,
-            run_id=run_id,
+        for scan_result in _scan_results(
+            scan_jobs=pending_scan_jobs,
             min_events_per_side=min_events_per_side,
             n_jobs=n_jobs,
         ):
-            pair_summary_rows.extend(scan_pair_rows)
-            modes_rows.extend(scan_mode_rows)
-            progress_bar.update(len(scan_pair_rows))
+            _append_scan_result(run_dir, scan_result)
+            progress_bar.update(scan_result.n_pairs)
 
-    pair_summary_df = _csv_frame(pair_summary_rows, PAIR_SUMMARY_SCHEMA).sort(
-        ["date_yyyymmdd", "symbol", "trade_exchange", "quote_exchange"],
-    )
-    pair_summary_df.write_csv(run_dir / "pair_summary.csv")
-
-    modes_df = _csv_frame(modes_rows, MODES_SCHEMA).sort(
-        [
-            "date_yyyymmdd",
-            "symbol",
-            "trade_exchange",
-            "quote_exchange",
-            "mode_index",
-        ],
-    )
-    modes_df.write_csv(run_dir / "modes.csv")
     return run_dir
 
 
@@ -811,10 +746,10 @@ def main() -> int:
         help="Number of joblib worker processes. Use -1 for all available cores.",
     )
     parser.add_argument(
-        "--output-base-dir",
+        "--output-dir",
         type=Path,
-        default=OUTPUT_BASE_DIR,
-        help="Parent directory for the run output.",
+        default=None,
+        help="Output directory used for CSV append and resume.",
     )
     parser.add_argument(
         "--no-progress",
@@ -830,14 +765,13 @@ def main() -> int:
         max_pairs=args.max_pairs,
         min_events_per_side=args.min_events_per_side,
         n_jobs=args.n_jobs,
-        output_base_dir=args.output_base_dir,
+        output_dir=args.output_dir,
         show_progress=not args.no_progress,
     )
     summary = {
         "run_dir": str(run_dir),
-        "pair_summary_csv": str(run_dir / "pair_summary.csv"),
-        "modes_csv": str(run_dir / "modes.csv"),
-        "run_config_json": str(run_dir / "run_config.json"),
+        "cross_k_summary_csv": str(run_dir / CROSS_K_SUMMARY_FILENAME),
+        "modes_csv": str(run_dir / MODES_FILENAME),
     }
     sys.stdout.write(json.dumps(summary, indent=2, sort_keys=True))
     sys.stdout.write("\n")
