@@ -1,0 +1,4 @@
+group_label,group_order,outcome,display_name,side,family,transform,actual_transition,n_obs,mean_delta,median_delta,std_delta,mean_y_pre,mean_y_post
+stay100,0,positive_far_from_zero_share,Positive far-from-zero share,positive,share,signed,100->100,3791,0.0026025676708945756,0.0019423558897242454,0.09730314171771419,0.6889917773589324,0.691594345029827
+to40,1,positive_far_from_zero_share,Positive far-from-zero share,positive,share,signed,100->40,223,-0.013921287104731962,-0.017225764924256204,0.09560161475409494,0.7738353072514886,0.7599140201467567
+to10,2,positive_far_from_zero_share,Positive far-from-zero share,positive,share,signed,100->10,10,-0.034804977674432705,-0.02648232626567326,0.09681335923215954,0.7746512375322238,0.7398462598577911

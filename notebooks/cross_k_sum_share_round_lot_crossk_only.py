@@ -63,8 +63,8 @@ def _(mo):
 def _(Path, pd):
     input_csv_path = Path("../data/derived/trade_quote_modes/all-crossk/cross_k_summary.csv")
     output_base_dir = Path("output/cross_k_sum_share_round_lot_effects_crossk_only")
-    trade_exchange = "N"
-    quote_exchange = "P"
+    trade_exchange = "Z"
+    quote_exchange = "Q"
     date_pre = "20251031"
     date_post = "20251103"
     pre_round_lot_required = 100.0
